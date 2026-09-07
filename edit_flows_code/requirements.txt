@@ -1,0 +1,6 @@
+torch>=2.0
+datasets>=2.19
+numpy
+pandas
+matplotlib
+tqdm

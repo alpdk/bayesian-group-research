@@ -1,0 +1,76 @@
+model:
+  vocab_size: 151645
+  hidden_size: 512
+  intermediate_size: 1536
+  num_layers: 14
+  num_attention_heads: 8
+  num_kv_heads: 8
+  max_position: 512
+  rms_norm_eps: 1e-6
+  dropout: 0.0
+  tie_lm_head: true
+  causal: false
+  arm_init: "none"
+
+training:
+  strategy: "progressive"
+  diffusion_layout: "full"
+  mode: "confidence_collapse"
+  confidence_threshold: 0.9
+  eos_id: 151643
+  K: 42
+  reference_length: 512
+  block_size: 512
+  k_schedule:
+    - [42, 0]
+    - [40, 30000]
+    - [36, 60000]
+    - [34, 90000]
+    - [30, 120000]
+    - [28, 150000]
+    - [24, 180000]
+    - [22, 210000]
+    - [18, 240000]
+    - [16, 270000]
+    - [12, 300000]
+  data_ratio: 1.0
+  learning_rate: 3e-4
+  weight_decay: 0.01
+  num_epochs: 20
+  max_steps: 260000
+  max_grad_norm: 1.0
+  batch_size: 32
+  warmup_steps: 1000
+  logging_steps: 100
+  eval_steps: 2000
+  save_steps: 2000
+  ema: 0.9999
+  early_stopping:
+    enabled: false
+    patience: 5
+    min_delta: 0.0
+
+validation:
+  val_dir: "none"
+  sampling:
+    temperature: 0.0
+    confidence: ["top_k"]
+    unmasking_num: [2, 3]
+    eos_id: 151643
+
+data:
+  mask_id: 151644
+  dataset: "apps"
+  data_dir: "data/apps_512"
+  code_qa_cache: null
+  val_ratio: 0.02
+  seed: 2026
+  training:
+    per_gpu_batch_size: ${training.batch_size}
+    cpus: 4
+
+wandb:
+  wandb: true
+  project: "edit-diffusion"
+  name: "puma-apps-512"
+  entity: null

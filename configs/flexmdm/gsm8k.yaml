@@ -1,0 +1,67 @@
+# UNI-D2 FlexMDM any-order GSM8K shared-params
+# (from examples/flexmdm/gsm8k_shared_params.sh).
+
+hydra:
+  data: gsm8k
+  algo: flexmdm-anyorder
+  model: flexmdm_anyorder
+  sampling: default
+  noise: linear
+  lr_scheduler: cosine_decay_warmup
+
+sampling:
+  steps: 128
+
+model:
+  length: 256
+
+loader:
+  global_batch_size: 64
+  eval_global_batch_size: 32
+  num_workers: 4
+
+trainer:
+  max_steps: 20000
+  val_check_interval: 2000
+  precision: bf16
+  gradient_clip_val: 1.0
+  log_every_n_steps: 100
+  num_sanity_val_steps: 0
+
+eval:
+  task: gsm8k
+  task_num_samples: 32
+  task_checkpoint_monitor: "test/pass@1_k1"
+  generate_samples: true
+
+lr_scheduler:
+  warmup_t: 500
+  warmup_lr_init: 1.0e-6
+  lr_min: 0.0
+
+optim:
+  lr: 3.0e-4
+  weight_decay: 0.03
+
+training:
+  ema: 0.9999
+
+seed: 42
+
+wandb:
+  project: edit-diffusion
+  entity: alpdk-podkopaev
+  name: flexmdm-gsm8k-L256-shared-params
+  group: shared-params
+  tags: [gsm8k, flexmdm-anyorder, shared-params, L256]
+
+callbacks:
+  checkpoint_every_n_steps:
+    every_n_train_steps: 2000
+  sample_saver:
+    enabled: false
+
+checkpointing:
+  resume_from_ckpt: false
+
+hydra_run_dir: ./outputs/gsm8k/flexmdm-shared-params

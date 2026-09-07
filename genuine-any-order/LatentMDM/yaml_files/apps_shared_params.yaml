@@ -1,0 +1,107 @@
+model:
+  tie_embeddings: true
+  planner:
+    vocab_size: 151645
+    hidden_size: 512
+    intermediate_size: 1536
+    num_layers: 10
+    num_attention_heads: 8
+    num_kv_heads: 8
+    max_position: 784
+    rms_norm_eps: 1e-6
+    dropout: 0.0
+    input_type: "continuous"
+    input_projection: false
+    return_last_hidden_states: true
+    apply_final_norm: false
+    causal: false
+    arm_init: "none"
+  encoder:
+    vocab_size: 151645
+    hidden_size: 512
+    intermediate_size: 1536
+    num_layers: 2
+    num_attention_heads: 8
+    num_kv_heads: 8
+    max_position: 32
+    rms_norm_eps: 1e-6
+    dropout: 0.0
+    input_type: "discrete"
+    return_last_hidden_states: true
+    apply_final_norm: false
+    segment_pooling: "eos_mean"
+    tie_lm_head: false
+    causal: false
+    arm_init: "none"
+  decoder:
+    vocab_size: 151645
+    hidden_size: 512
+    intermediate_size: 1536
+    num_layers: 2
+    num_attention_heads: 8
+    num_kv_heads: 8
+    max_position: 33
+    rms_norm_eps: 1e-6
+    dropout: 0.0
+    input_type: "discrete"
+    input_projection: false
+    return_last_hidden_states: false
+    apply_final_norm: false
+    tie_lm_head: true
+    causal: true
+    arm_init: "none"
+
+training:
+  strategy: "latmdm"
+  eos_id: 151643
+  data_ratio: 1.0
+  learning_rate: 3e-4
+  weight_decay: 0.03
+  num_epochs: 200
+  max_steps: 260000
+  max_grad_norm: 1.0
+  batch_size: 16
+  gradient_accumulation_steps: 1
+  decoder_chunk_size: 128
+  warmup_steps: 500
+  logging_steps: 100
+  eval_steps: 2000
+  save_steps: 2000
+  early_stop_patience: 0
+  early_stop_min_delta: 0.0
+  ema: 0.9999
+
+validation:
+  val_dir: "none"
+  limit: 32
+  trace_path: "eval_traces/lmdm_eval_trace_avglp.txt"
+  log_path: "eval_traces/lmdm_eval_passed_indices.jsonl"
+  eval_batch_size: 16
+  compute_flops: false
+  sampling:
+    track: false
+    temperature: 0.0
+    slot_temperature: 0.0
+    eos_id: 151643
+    max_seg_num: 16
+    max_seg_len: 32
+    candidate_chunk_size: 256
+    confidence: ["avg_log_prob"]
+    pass_at_k: [1]
+    unmasking_num: [1]
+
+data:
+  mask_id: 151644
+  dataset: "apps"
+  data_dir: "data/apps_shared_params"
+  val_ratio: 0.02
+  seed: 42
+  training:
+    per_gpu_batch_size: ${training.batch_size}
+    cpus: 4
+
+wandb:
+  wandb: true
+  project: "edit-diffusion"
+  name: "latentmdm-apps-L512-shared-params"
+  entity: null

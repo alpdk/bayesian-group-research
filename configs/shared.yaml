@@ -1,0 +1,36 @@
+# Shared knobs for this comparison cycle (MDLM, PUMA, FlexMDM, EditFlow).
+# Task metrics: docs/research/metrics.md
+# Datasets: TinyGSM and GSM8K only. LatentMDM / APPS / TACO are out of cycle.
+
+length: 256
+global_batch_size: 64
+seed: 42
+precision: bf16
+grad_clip: 1.0
+lr: 3.0e-4
+weight_decay: 0.03
+ema: 0.9999
+val_every: 2000
+ckpt_every: 2000
+log_every: 100
+task_num_samples: 32
+sampling_steps: 128
+pass_at_1_k: [1, 2, 4, 8]
+num_workers: 4
+
+wandb:
+  project: edit-diffusion
+  entity: alpdk-podkopaev
+  group: shared-params
+
+tinygsm:
+  max_examples: 100000
+  max_steps: 260000
+  eval_task: tinygsm
+  transfer_task: gsm8k
+  task_checkpoint_monitor: "test/pass@1_k1"
+
+gsm8k:
+  max_steps: 20000
+  eval_task: gsm8k
+  task_checkpoint_monitor: "test/pass@1_k1"

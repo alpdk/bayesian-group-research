@@ -1,0 +1,35 @@
+# EditFlow TinyGSM shared-params (from edit_flows_code/scripts/run_editflow_shared_params.sh).
+# Prompt/target 128+128 (L=256 total). Launch that script from edit_flows_code/.
+
+dataset: tinygsm
+max_examples: 100000
+steps: 260000
+batch_size: 64
+grad_accum: 1
+lr: 3.0e-4
+weight_decay: 0.03
+warmup_steps: 500
+hidden_dim: 768
+num_layers: 12
+num_heads: 12
+dropout: 0.1
+max_prompt_len: 128
+max_target_len: 128
+coupling: empty
+val_every: 2000
+patience: 9999
+grad_clip: 1.0
+t_eps: 1.0e-2
+precision: bf16
+task_eval_samples: 32
+task_eval_steps: 128
+val_max_examples: 256
+save_every: 2000
+log_every: 50
+seed: 42
+
+wandb:
+  project: edit-diffusion
+  entity: alpdk-podkopaev
+  name: editflow-tinygsm-L256-shared-params
+  group: shared-params

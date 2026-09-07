@@ -1,0 +1,119 @@
+defaults:
+  - _self_
+  - /callbacks:
+    - checkpoint_every_n_steps
+    - checkpoint_monitor
+    - checkpoint_task_monitor
+    - learning_rate_monitor
+    - sample_saver
+    - eval_protocol
+    - perf
+    - early_stopping
+  - /data: text8 
+  - /model: small_candi
+  - /strategy: ddp
+  - /noise: inverse-cdf
+  - /lr_scheduler: constant_warmup
+  - /prior: none
+  - /sampling: candi
+  - /algo: candi
+
+seed: 1
+
+# base directory for caching datasets and models 
+scratch_dir: ${oc.env:DISCRETE_DIFFUSION_SCRATCH_DIR,${oc.env:HOME}/.cache/discrete_diffusion}
+block_size: ${model.length}
+
+neg_infinity_mode: large-finite  # large-finite / true-inf
+
+loader:
+  global_batch_size: 512
+  eval_global_batch_size: ${.global_batch_size}
+  # Note: batch_size and eval_batch_size are **per machine**
+  batch_size: ${div_up:${.global_batch_size}, ${mul:${trainer.devices}, ${trainer.num_nodes}}}
+  eval_batch_size: ${div_up:${.eval_global_batch_size}, ${mul:${trainer.devices}, ${trainer.num_nodes}}}
+  num_workers: 12
+  pin_memory: True
+
+training:
+  ema: 0.9999
+  antithetic_sampling: True
+  importance_sampling: False
+  change_of_variables: False
+  loss_precision: 'bf16'  # bf16, float32, float64
+  finetune_path: ''
+  torch_compile: false
+  resample: False
+  sampling_eps: 1e-3
+  sampling_eps_min: 1e-3
+  sampling_eps_max: 1.0
+  eval_nll: True
+  fault_tolerant: true
+
+eval:
+  checkpoint_path: ''  # Used to evaluate a checkpoint after training.
+  disable_ema: False
+  compute_perplexity_on_sanity: False
+  generate_samples: True
+  save_validation_samples: false
+  generated_samples_path: ${cwd:}/samples.json
+  results_json_path: null
+  npz_path: null
+  task: null  # gsm8k | tinygsm; inferred from data.train when null
+  transfer_task: null  # extra test split; tinygsm runs default to gsm8k
+  task_num_samples: 32
+  wandb_table_rows: 16
+  nll_answer: true  # GSM8K / TinyGSM: also log val/nll_answer on answer tokens
+  gen_ppl: false  # optional offline Gemma PPL; not part of the eval protocol
+  task_checkpoint_monitor: "test/pass@1_match"
+
+optim:
+  weight_decay: 0
+  lr: 3e-4
+  beta1: 0.9
+  beta2: 0.999
+  eps: 1e-8
+
+trainer:
+  accelerator: cuda
+  num_nodes: 1
+  devices: ${device_count:}
+  accumulate_grad_batches: ${div_up:${loader.global_batch_size}, ${mul:${trainer.devices}, ${loader.batch_size}, ${trainer.num_nodes}}}
+  gradient_clip_val: 1.0
+  precision: 'bf16'
+  num_sanity_val_steps: 2
+  max_steps: 1_000_000
+  log_every_n_steps: 100
+  limit_train_batches: 1.0   # train on full dataset, can be used to toggle quick run
+  limit_val_batches: 1.0     # validate on full dataset, can be used to toggle quick run
+  val_check_interval: 10000
+  check_val_every_n_epoch: null
+  # Popped before Lightning Trainer(); alias of training.fault_tolerant
+  fault_tolerant: ${training.fault_tolerant}
+
+wandb:
+  project: UNI-D2
+  entity: alpdk-podkopaev
+  notes: null
+  group: null
+  job_type: null
+  name: null
+  id: null 
+  tags:
+    - ${data.train}
+    - ${data.valid}
+    - ${algo.name}
+    - steps=${sampling.steps}
+
+hydra:
+  run:
+    dir: ./outputs/${data.train}/${now:%Y.%m.%d}/${now:%H%M%S}
+  job:
+    chdir: true
+
+checkpointing:
+  # Use custom `save_dir` if, e.g., saving to S3 bucket, otherwise leave this parameter as is
+  save_dir: ${cwd:}/dummy_checkpoints
+  # Note: `checkpoints` path should correspond to `checkpoint_every_n_steps.dirpath`
+  resume_from_ckpt: true
+  resume_ckpt_path: ${.save_dir}/checkpoints/last.ckpt

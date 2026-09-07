@@ -1,0 +1,9 @@
+eval_protocol:
+  _target_: src.discrete_diffusion.callbacks.eval_protocol.EvalProtocol
+  enabled: true
+  task: ${eval.task}
+  transfer_task: ${eval.transfer_task}
+  task_num_samples: ${eval.task_num_samples}
+  wandb_table_rows: ${eval.wandb_table_rows}
+  save_dir: ${cwd:}/val_samples
+  save_artifacts: true

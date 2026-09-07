@@ -1,0 +1,9 @@
+train: gsm8k
+valid: gsm8k
+tokenizer_name_or_path: gpt2
+cache_dir: ${scratch_dir}/gsm8k
+wrap: False
+chunking: none
+streaming: False
+insert_train_eos: True
+insert_valid_eos: True

@@ -1,0 +1,3 @@
+perf:
+  _target_: src.discrete_diffusion.callbacks.perf.PerfMonitor
+  enabled: true

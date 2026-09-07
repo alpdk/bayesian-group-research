@@ -1,0 +1,10 @@
+checkpoint_task_monitor:
+  _target_: src.discrete_diffusion.callbacks.eval_protocol.TaskMetricCheckpoint
+  monitor: ${eval.task_checkpoint_monitor}
+  mode: max
+  save_top_k: 1
+  save_last: False
+  dirpath: ${checkpointing.save_dir}/checkpoints
+  filename: best-task
+  auto_insert_metric_name: False
+  verbose: True

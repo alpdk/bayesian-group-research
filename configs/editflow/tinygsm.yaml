@@ -1,5 +1,5 @@
 # EditFlow TinyGSM shared-params (from edit_flows_code/scripts/run_editflow_shared_params.sh).
-# Prompt/target 128+128 (L=256 total). Launch that script from edit_flows_code/.
+# Prompt/target 128+128 bytes (L=256 total). No EMA in this trainer. Launch from edit_flows_code/.
 
 dataset: tinygsm
 max_examples: 100000
@@ -25,7 +25,7 @@ task_eval_samples: 32
 task_eval_steps: 128
 val_max_examples: 256
 save_every: 2000
-log_every: 50
+log_every: 100
 seed: 42
 
 wandb:

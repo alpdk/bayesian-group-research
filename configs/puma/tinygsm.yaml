@@ -1,16 +1,17 @@
-# PUMA TinyGSM L=256 (from PUMA/yaml_files/tinygsm_puma_256.yaml).
-# Launch: PUMA/launch_tinygsm256.sh  (CFG=yaml_files/tinygsm_puma_256.yaml)
+# PUMA TinyGSM L=256 shared-params.
+# Launch: PUMA/launch_tinygsm256.sh  (point CFG at this file or yaml_files copy).
+# Tokenizer stays Qwen (cached data/tiny_gsm_256). Width matches UNI-D2 `small`.
 
 model:
   vocab_size: 151645
-  hidden_size: 512
-  intermediate_size: 1536
-  num_layers: 14
-  num_attention_heads: 8
-  num_kv_heads: 8
+  hidden_size: 768
+  intermediate_size: 2048
+  num_layers: 12
+  num_attention_heads: 12
+  num_kv_heads: 12
   max_position: 256
   rms_norm_eps: 1.0e-6
-  dropout: 0.0
+  dropout: 0.1
   tie_lm_head: true
   causal: false
   arm_init: "none"
@@ -24,33 +25,34 @@ training:
   K: 21
   reference_length: 256
   block_size: 256
+  # Same k ladder as the paper schedule; steps scaled from 300k → max_steps 260k.
   k_schedule:
     - [21, 0]
-    - [20, 30000]
-    - [18, 60000]
-    - [17, 90000]
-    - [15, 120000]
-    - [14, 150000]
-    - [12, 180000]
-    - [11, 210000]
-    - [9, 240000]
-    - [8, 270000]
-    - [6, 300000]
+    - [20, 26000]
+    - [18, 52000]
+    - [17, 78000]
+    - [15, 104000]
+    - [14, 130000]
+    - [12, 156000]
+    - [11, 182000]
+    - [9, 208000]
+    - [8, 234000]
+    - [6, 260000]
   data_ratio: 1.0
   learning_rate: 3.0e-4
-  weight_decay: 0.01
+  weight_decay: 0.03
   num_epochs: 20
   max_steps: 260000
   max_grad_norm: 1.0
   batch_size: 64
-  warmup_steps: 1000
+  warmup_steps: 500
   logging_steps: 100
   eval_steps: 2000
   save_steps: 2000
   ema: 0.9999
   early_stopping:
     enabled: false
-    patience: 5
+    patience: 9999
     min_delta: 0.0
 
 validation:
@@ -66,7 +68,7 @@ data:
   dataset: "tinygsm"
   data_dir: "data/tiny_gsm_256"
   val_ratio: 0.02
-  seed: 2026
+  seed: 42
   training:
     per_gpu_batch_size: ${training.batch_size}
     cpus: 4

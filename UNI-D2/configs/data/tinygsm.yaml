@@ -1,12 +1,1 @@
-train: tinygsm
-valid: tinygsm
-tokenizer_name_or_path: gpt2
-cache_dir: ${scratch_dir}/tinygsm
-wrap: False
-chunking: none
-streaming: False
-insert_train_eos: True
-insert_valid_eos: True
-max_examples: 100000
-val_ratio: 0.02
-split_seed: 42
+../../../configs/data/tinygsm.yaml

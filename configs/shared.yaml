@@ -1,22 +1,44 @@
-# Shared knobs for this comparison cycle (MDLM, PUMA, FlexMDM, EditFlow).
-# Task metrics: docs/research/metrics.md
+# Comparison contract for this cycle (MDLM, PUMA, FlexMDM, EditFlow).
+# Method YAMLs must copy these values. Algorithm-only knobs stay in method files.
+# Docs: docs/research/configs.md    Metrics: docs/research/metrics.md
 # Datasets: TinyGSM and GSM8K only. LatentMDM / APPS / TACO are out of cycle.
 
+# Sequence / batch
 length: 256
 global_batch_size: 64
+eval_global_batch_size: 32
+num_workers: 4
+
+# Optim
 seed: 42
 precision: bf16
 grad_clip: 1.0
 lr: 3.0e-4
 weight_decay: 0.03
+warmup_steps: 500
+warmup_lr_init: 1.0e-6
+lr_min: 0.0
 ema: 0.9999
+
+# Backbone width (UNI-D2 `small` / EditFlow). PUMA uses the same hidden/layers/heads.
+hidden_size: 768
+num_layers: 12
+num_heads: 12
+dropout: 0.1
+
+# Cadence
 val_every: 2000
 ckpt_every: 2000
 log_every: 100
+early_stopping_patience: 9999  # off: run the full max_steps budget
+resume_from_ckpt: false
+
+# Test generate+score
 task_num_samples: 32
 sampling_steps: 128
 pass_at_1_k: [1, 2, 4, 8]
-num_workers: 4
+generate_samples: true
+task_checkpoint_monitor: "test/pass@1_k1"
 
 wandb:
   project: edit-diffusion
@@ -26,11 +48,10 @@ wandb:
 tinygsm:
   max_examples: 100000
   max_steps: 260000
+  val_ratio: 0.02
   eval_task: tinygsm
   transfer_task: gsm8k
-  task_checkpoint_monitor: "test/pass@1_k1"
 
 gsm8k:
   max_steps: 20000
   eval_task: gsm8k
-  task_checkpoint_monitor: "test/pass@1_k1"

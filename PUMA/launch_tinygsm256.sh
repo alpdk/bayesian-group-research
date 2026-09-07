@@ -11,13 +11,15 @@
 #   PUMA_DIR   repo root   (default: directory of this script)
 #   VENV       python venv (default: $PUMA_DIR/.venv)
 #   NPROC      GPUs to use (default: 4)
+#   CFG        YAML        (default: ../configs/puma/tinygsm.yaml)
 
 set -euo pipefail
 
 PUMA_DIR="${PUMA_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
+COMPARISON_ROOT="$(cd "$PUMA_DIR/.." && pwd)"
 VENV="${VENV:-$PUMA_DIR/.venv}"
 NPROC="${NPROC:-4}"
-CFG="yaml_files/tinygsm_puma_256.yaml"
+CFG="${CFG:-$COMPARISON_ROOT/configs/puma/tinygsm.yaml}"
 DATA_DIR="data/tiny_gsm_256"
 
 cd "$PUMA_DIR"

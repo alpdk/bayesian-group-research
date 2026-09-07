@@ -7,7 +7,7 @@ This repo is not a fork of UNI-D2. Upstream UNI-D2 lives in `UNI-D2/` as a neste
 **This cycle:** MDLM, PUMA, FlexMDM, EditFlow.  
 **Out of cycle:** LatentMDM (do not add runs or metrics). APPS and TACO are not used.
 
-Shared metric names, prefixes, and how to read charts: [`docs/research/metrics.md`](docs/research/metrics.md). Cluster holders and node requests: [`docs/research/hpc.md`](docs/research/hpc.md).
+Shared metric names, prefixes, and how to read charts: [`docs/research/metrics.md`](docs/research/metrics.md). Shared-params knobs: [`docs/research/configs.md`](docs/research/configs.md). Cluster holders and node requests: [`docs/research/hpc.md`](docs/research/hpc.md).
 
 ## Layout
 
@@ -19,7 +19,7 @@ Shared metric names, prefixes, and how to read charts: [`docs/research/metrics.m
 │   └── FlexMDM/
 ├── edit_flows_code/        # EditFlow trainer for GSM8K / TinyGSM
 ├── configs/                # shared-params used this cycle (TinyGSM / GSM8K)
-├── docs/research/          # comparison protocol (metrics.md)
+├── docs/research/          # comparison protocol (metrics.md, configs.md)
 ├── analysis/               # local checks and dataset length scripts
 └── .venv/                  # Python env for UNI-D2 (create at repo root)
 ```
@@ -31,8 +31,9 @@ Shared metric names, prefixes, and how to read charts: [`docs/research/metrics.m
 | `PUMA/`                      | PUMA paper trainer. TinyGSM / GSM8K launch scripts and YAML.                                                                                                              |
 | `genuine-any-order/FlexMDM/` | Paper FlexMDM (Dream-Coder insertion + unmask). Use this when the Lightning FlexMDM path is not the paper code.                                                           |
 | `edit_flows_code/`           | Conditional Edit Flows on GSM8K / TinyGSM.                                                                                                                                |
-| `configs/`                   | Experiment YAMLs for this cycle (`shared.yaml`, then `mdlm/`, `flexmdm/`, `puma/`, `editflow/`). Launch scripts in each method dir still apply these knobs.               |
+| `configs/`                   | Shared-params YAMLs. Launch scripts load these files (not method-local copies).                                                                                          |
 | `docs/research/metrics.md`   | Required W&B keys (`train/`, `val/`, `test/`, `perf/`, `healthy/`, `stats/`).                                                                                             |
+| `docs/research/configs.md`   | Shared-params knobs and per-trainer names (`configs/shared.yaml`, `mdlm/`, `flexmdm/`, `puma/`, `editflow/`).                                                            |
 | `analysis/`                  | Protocol parser checks and length histograms. Not the UNI-D2 test suite.                                                                                                  |
 
 
@@ -72,25 +73,21 @@ Datasets cache under `~/.cache/discrete_diffusion` unless `DISCRETE_DIFFUSION_SC
 
 ## How to run
 
-Work from the method directory. Launch scripts and Hydra overrides live there; this README does not duplicate them.
+Work from the method directory. Shared-params live in [`configs/`](configs/); launch scripts pass those files through.
 
 **MDLM / FlexMDM (UNI-D2)**
 
 ```bash
 cd UNI-D2
-PYTHONPATH=src python -u -m discrete_diffusion \
-  data=tinygsm \
-  algo=mdlm \
-  # ... see examples/mdlm/tinygsm_shared_params.sh
+bash examples/mdlm/tinygsm_shared_params.sh      # configs/mdlm/tinygsm.yaml
+bash examples/flexmdm/gsm8k_shared_params.sh     # configs/flexmdm/gsm8k.yaml
 ```
-
-Shared-param examples: `UNI-D2/examples/mdlm/`, `UNI-D2/examples/flexmdm/` (`tinygsm_shared_params.sh`, `gsm8k_shared_params.sh`).
 
 **PUMA**
 
 ```bash
 cd PUMA
-# e.g. launch_tinygsm256.sh  — see PUMA/README.md
+bash launch_tinygsm256.sh                        # configs/puma/tinygsm.yaml
 ```
 
 **Paper FlexMDM**
@@ -104,8 +101,8 @@ cd genuine-any-order/FlexMDM
 
 ```bash
 cd edit_flows_code
-# scripts/run_editflow_gsm8k_shared_params.sh
-# scripts/run_editflow_shared_params.sh   # TinyGSM
+bash scripts/run_editflow_shared_params.sh       # configs/editflow/tinygsm.yaml
+bash scripts/run_editflow_gsm8k_shared_params.sh # configs/editflow/gsm8k.yaml
 ```
 
 Each trainer must log the keys in `docs/research/metrics.md`. Lightning UNI-D2 already logs `perf/val_step_s` via `PerfMonitor`. PUMA and EditFlow should time a val batch the same way.

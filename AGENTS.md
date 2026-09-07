@@ -6,6 +6,7 @@ Read before cluster or training work:
 
 - [`docs/research/hpc.md`](docs/research/hpc.md) — live node-request situation, holders, `srun --overlap`, workspaces
 - [`docs/research/metrics.md`](docs/research/metrics.md) — W&B keys for this cycle
+- [`docs/research/configs.md`](docs/research/configs.md) — shared-params knobs and per-trainer names
 - [`README.md`](README.md) — layout and how to run each method
 - [`configs/`](configs/) — shared-params used this cycle
 

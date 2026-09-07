@@ -1,8 +1,8 @@
 """Train a prompt-conditional Edit Flows model for code generation.
 
 Examples (from the edit_flows_code/ directory):
-    python train.py --dataset gsm8k --steps 3000
-    python train.py --dataset tinygsm --max-examples 100000 --steps 10000
+    python train.py --cfg ../configs/editflow/gsm8k.yaml --save-dir results/run
+    python train.py --cfg ../configs/editflow/tinygsm.yaml --save-dir results/run
 """
 
 import argparse
@@ -290,6 +290,32 @@ def save_metrics(metrics: dict, save_dir: Path):
         json.dump(metrics, f)
 
 
+def _load_yaml(path):
+    try:
+        from omegaconf import OmegaConf
+        return OmegaConf.to_container(OmegaConf.load(path), resolve=True)
+    except ImportError:
+        pass
+    import yaml
+    with open(path) as handle:
+        return yaml.safe_load(handle)
+
+
+def _apply_yaml_defaults(parser, path):
+    raw = _load_yaml(path) or {}
+    wandb = dict(raw.pop("wandb", None) or {})
+    defaults = {key: value for key, value in raw.items() if value is not None}
+    if wandb.get("project"):
+        defaults["wandb_project"] = wandb["project"]
+    if wandb.get("name"):
+        defaults["wandb_name"] = wandb["name"]
+    if wandb.get("entity"):
+        defaults["wandb_entity"] = wandb["entity"]
+    if wandb.get("group"):
+        defaults["wandb_group"] = wandb["group"]
+    parser.set_defaults(**defaults)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dataset", choices=DATASET_CHOICES, default="gsm8k")
@@ -344,6 +370,13 @@ def main():
     parser.add_argument("--wandb-project", type=str, default=None,
                         help="Log metrics to this wandb project (default: wandb disabled)")
     parser.add_argument("--wandb-name", type=str, default=None, help="wandb run name")
+    parser.add_argument("--wandb-entity", type=str, default=None)
+    parser.add_argument("--wandb-group", type=str, default=None)
+    parser.add_argument("--cfg", type=str, default=None,
+                        help="YAML from comparison-repo configs/editflow/")
+    pre, _ = parser.parse_known_args()
+    if pre.cfg:
+        _apply_yaml_defaults(parser, pre.cfg)
     args = parser.parse_args()
 
     torch.manual_seed(args.seed)
@@ -365,6 +398,10 @@ def main():
             mode="online",
             tags=["editflow", args.dataset, "shared-params", "L256"],
         )
+        if getattr(args, "wandb_entity", None):
+            wandb_kwargs["entity"] = args.wandb_entity
+        if getattr(args, "wandb_group", None):
+            wandb_kwargs["group"] = args.wandb_group
         run_id = os.environ.get("WANDB_RUN_ID")
         if run_id:
             wandb_kwargs["id"] = run_id

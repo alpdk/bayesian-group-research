@@ -18,6 +18,7 @@ from ..evaluations.task import (
   encode_question_prefixes,
   infer_task_name,
   load_task_split,
+  pass_at_1_k_values,
   score_gsm8k_python_record,
   score_gsm8k_record,
   score_tinygsm_record,
@@ -97,6 +98,16 @@ class EvalProtocol(L.Callback):
       pl_module.log(
         key, value, on_step=False, on_epoch=True,
         sync_dist=False, rank_zero_only=True)
+
+    n_ok = sum(1 for rec in records if rec.get("correct"))
+    print(
+      f"Eval protocol step {pl_module.global_step}: "
+      f"{n_ok}/{len(records)} correct; {metrics}")
+    for i, rec in enumerate(records[:8]):
+      gen = (rec.get("generation") or "").replace("\n", "\\n")
+      print(
+        f"  [{i}] correct={rec.get('correct')} "
+        f"extracted={rec.get('extracted_answer')!r} gen={gen[:240]!r}")
 
     logger = trainer.logger
     # if texts and hasattr(logger, "log_table"):
@@ -188,22 +199,27 @@ class EvalProtocol(L.Callback):
     all_texts: List[str] = []
     all_records: List[Dict[str, Any]] = []
     metrics: Dict[str, float] = {}
+    ks = pass_at_1_k_values(config)
     for i, task_name in enumerate(eval_tasks):
       namespace = None if i == 0 else task_name
-      tokens, texts, records = self._task_samples(pl_module, config, task_name)
-      all_tokens.append(tokens)
-      all_texts.extend(texts)
-      tagged = []
-      for rec in records:
-        row = dict(rec)
-        row["eval_task"] = task_name
-        tagged.append(row)
-      all_records.extend(tagged)
-      metrics.update(aggregate_task_metrics(records, task_name, namespace))
+      for k in ks:
+        tokens, texts, records = self._task_samples(
+          pl_module, config, task_name, unmask_k=k)
+        metrics.update(aggregate_task_metrics(records, task_name, namespace, k=k))
+        if int(k) != 1:
+          continue
+        all_tokens.append(tokens)
+        all_texts.extend(texts)
+        tagged = []
+        for rec in records:
+          row = dict(rec)
+          row["eval_task"] = task_name
+          tagged.append(row)
+        all_records.extend(tagged)
     cat = torch.cat(all_tokens, dim=0) if all_tokens else None
     return cat, all_texts, all_records, metrics
 
-  def _task_samples(self, pl_module, config, task):
+  def _task_samples(self, pl_module, config, task, unmask_k=None):
     n = int(self.task_num_samples)
     questions, golds = load_task_split(task, n, config=config)
     tokenizer = pl_module.tokenizer
@@ -216,7 +232,7 @@ class EvalProtocol(L.Callback):
       gs = golds[start:start + batch_size]
       prefixes = encode_question_prefixes(tokenizer, qs)
       samples = pl_module.generate_samples(
-        num_samples=len(prefixes), prefix=prefixes)
+        num_samples=len(prefixes), prefix=prefixes, unmask_k=unmask_k)
       samples = samples.detach().cpu()
       all_tokens.append(samples)
       decoded = tokenizer.batch_decode(samples.tolist(), skip_special_tokens=True)

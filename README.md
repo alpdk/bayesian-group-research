@@ -15,8 +15,6 @@ Shared metric names, prefixes, and how to read charts: [`docs/research/metrics.m
 .
 ├── UNI-D2/                 # upstream UNI-D2 (MDLM + FlexMDM Lightning trainers)
 ├── PUMA/                   # Progressive Unmasking trainer
-├── genuine-any-order/      # paper FlexMDM (and LatentMDM, unused this cycle)
-│   └── FlexMDM/
 ├── edit_flows_code/        # EditFlow trainer for GSM8K / TinyGSM
 ├── configs/                # shared-params used this cycle (TinyGSM / GSM8K)
 ├── docs/research/          # comparison protocol (metrics.md, configs.md)
@@ -29,7 +27,6 @@ Shared metric names, prefixes, and how to read charts: [`docs/research/metrics.m
 | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `UNI-D2/`                    | Hydra + Lightning. MDLM (`algo=mdlm`) and FlexMDM any-order (`algo=flexmdm-anyorder`). Same top-level files as [nkalyanv99/UNI-D2](https://github.com/nkalyanv99/UNI-D2). |
 | `PUMA/`                      | PUMA paper trainer. TinyGSM / GSM8K launch scripts and YAML.                                                                                                              |
-| `genuine-any-order/FlexMDM/` | Paper FlexMDM (Dream-Coder insertion + unmask). Use this when the Lightning FlexMDM path is not the paper code.                                                           |
 | `edit_flows_code/`           | Conditional Edit Flows on GSM8K / TinyGSM.                                                                                                                                |
 | `configs/`                   | Shared-params YAMLs. Launch scripts load these files (not method-local copies).                                                                                          |
 | `docs/research/metrics.md`   | Required W&B keys (`train/`, `val/`, `test/`, `perf/`, `healthy/`, `stats/`).                                                                                             |
@@ -41,7 +38,7 @@ Shared metric names, prefixes, and how to read charts: [`docs/research/metrics.m
 
 ## Metrics (short)
 
-Every logged scalar uses one prefix. Rank methods with `val/nll` (likelihood), `val/loss` (held-out objective), and `test/pass@1_k{1,2,4,8}` (task). Do not rank by `train/loss`. `perf/` is wall-clock only.
+Every logged scalar uses one prefix. Rank methods with `val/loss` (held-out objective) and `test/pass@1_k{1,2,4,8}` (task). Do not rank by `train/loss`. `perf/` is wall-clock only.
 
 `k` is **tokens generated per sampling step** (1, 2, 4, 8), not the number of denoising steps. TinyGSM also logs GSM8K transfer under `test/gsm8k/pass@1_k`*.
 
@@ -65,7 +62,6 @@ Other trainers use their own environments:
 
 ```bash
 conda env create -f PUMA/environment.yml          # conda env: puma
-# FlexMDM paper code: genuine-any-order/FlexMDM/environment.yml
 python -m pip install -r edit_flows_code/requirements.txt
 ```
 
@@ -88,13 +84,6 @@ bash examples/flexmdm/gsm8k_shared_params.sh     # configs/flexmdm/gsm8k.yaml
 ```bash
 cd PUMA
 bash launch_tinygsm256.sh                        # configs/puma/tinygsm.yaml
-```
-
-**Paper FlexMDM**
-
-```bash
-cd genuine-any-order/FlexMDM
-# see README.md and scripts/
 ```
 
 **EditFlow**

@@ -43,7 +43,11 @@ class AbsorbingSampler(Sampler):
 
   @torch.no_grad()
   def generate(self, model, *, num_samples, num_steps, eps, inject_bos,
-               prefix=None):
+               prefix=None, unmask_k=None):
+    if unmask_k is not None:
+      return self._generate_topk(
+        model, num_samples=num_samples, unmask_k=int(unmask_k),
+        inject_bos=inject_bos, prefix=prefix)
     if num_steps is None:
       num_steps = self.config.sampling.steps
     x = model.prior_sample(num_samples, model.num_tokens)
@@ -81,6 +85,44 @@ class AbsorbingSampler(Sampler):
       p_x0=p_x0_cache,
       noise_removal_step=True)
 
+    return x
+
+  @torch.no_grad()
+  def _generate_topk(self, model, *, num_samples, unmask_k, inject_bos, prefix):
+    """Unmask ``unmask_k`` highest-confidence mask tokens per step (protocol k)."""
+    x = model.prior_sample(num_samples, model.num_tokens)
+    inject_bos = self.config.sampling.inject_bos if inject_bos is None else inject_bos
+    if prefix is not None:
+      x = self._apply_prefix(model, x, prefix, inject_bos)
+    elif inject_bos:
+      x[:, 0] = model.tokenizer.bos_token_id
+    device = model.device
+    k = max(int(unmask_k), 1)
+    sigma = torch.zeros(num_samples, 1, device=device)
+    max_iters = (x.shape[1] + k - 1) // k + 2
+    for _ in range(max_iters):
+      masked = x.eq(model.mask_id)
+      if not bool(masked.any()):
+        break
+      log_p_x0 = model.forward(x, sigma)
+      if self.config.sampling.use_float64:
+        log_p_x0 = log_p_x0.to(torch.float64)
+      p_x0 = log_p_x0.exp()
+      conf = p_x0.max(dim=-1).values.masked_fill(~masked, float("-inf"))
+      keep_k = min(k, x.shape[1])
+      topv, topi = conf.topk(keep_k, dim=-1)
+      keep = torch.zeros_like(masked)
+      valid = torch.isfinite(topv)
+      keep.scatter_(1, topi, valid)
+      keep = keep & masked
+      sampled = sample_categorical(p_x0)
+      x = torch.where(keep, sampled, x)
+    leftover = x.eq(model.mask_id)
+    if bool(leftover.any()):
+      log_p_x0 = model.forward(x, sigma)
+      if self.config.sampling.use_float64:
+        log_p_x0 = log_p_x0.to(torch.float64)
+      x = torch.where(leftover, sample_categorical(log_p_x0.exp()), x)
     return x
 
   def _apply_prefix(self, model, x, prefix, inject_bos):

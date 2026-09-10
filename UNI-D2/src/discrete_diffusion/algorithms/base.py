@@ -258,39 +258,18 @@ class TrainerBase(L.LightningModule):
     return losses.loss
 
   def on_train_epoch_end(self):
-    train_metrics = {}
-    for k, v in self.metrics.train_nlls.items():
-      if getattr(v, 'weight', 0) > 0:
-        train_metrics[k] = v.compute()
-    if train_metrics:
-      self.log_dict(train_metrics, on_step=False, on_epoch=True, sync_dist=True)
-    if hasattr(self.metrics, 'train_aux') and self.metrics.train_aux.weight > 0:
-      self.log(name='train/aux', value=self.metrics.train_aux.compute(), on_step=False, on_epoch=True, sync_dist=True)
+    return
 
   def on_validation_epoch_start(self):
     self.metrics.reset()
     self._eval_mode()
-    assert self.metrics.valid_nlls.nll.mean_value == 0
-    assert self.metrics.valid_nlls.nll.weight == 0
+    assert self.metrics.valid_nlls.loss.mean_value == 0
+    assert self.metrics.valid_nlls.loss.weight == 0
 
   def validation_step(self, batch, batch_idx):
     losses = self._loss(batch['input_ids'], batch['attention_mask'])
     self.metrics.update_valid(losses.nlls, losses.num_tokens)
-    if (getattr(self.config.eval, 'nll_answer', False)
-        and 'prompt_len' in batch):
-      answer_nlls, answer_tokens = self._answer_nll(
-        batch['input_ids'], batch['attention_mask'], batch['prompt_len'])
-      if answer_tokens > 0:
-        self.metrics.update_valid_answer(answer_nlls, answer_tokens)
     return losses.loss
-
-  def _answer_nll(self, input_ids, attention_mask, prompt_len):
-    answer_mask = attention_mask.clone()
-    plen_list = prompt_len.tolist() if torch.is_tensor(prompt_len) else list(prompt_len)
-    for i, plen in enumerate(plen_list):
-      answer_mask[i, :int(plen)] = 0
-    answer_losses = self._loss(input_ids, answer_mask)
-    return answer_losses.nlls, answer_losses.num_tokens
 
   def on_validation_epoch_end(self):
     valid_metrics = {}
@@ -299,14 +278,6 @@ class TrainerBase(L.LightningModule):
         valid_metrics[k] = v.compute()
     if valid_metrics:
       self.log_dict(valid_metrics, on_step=False, on_epoch=True, sync_dist=True)
-    if hasattr(self.metrics, 'valid_aux') and self.metrics.valid_aux.weight > 0:
-      self.log(name='val/aux', value=self.metrics.valid_aux.compute(), on_step=False, on_epoch=True, sync_dist=True)
-    if (hasattr(self.metrics, 'valid_answer_nll')
-        and self.metrics.valid_answer_nll.weight > 0):
-      self.log(
-        name='val/nll_answer',
-        value=self.metrics.valid_answer_nll.compute(),
-        on_step=False, on_epoch=True, sync_dist=True)
     self._train_mode()
 
   def configure_optimizers(self):
@@ -321,7 +292,7 @@ class TrainerBase(L.LightningModule):
     scheduler = hydra.utils.instantiate(self.config.lr_scheduler, optimizer=optimizer)
     scheduler_dict = {'scheduler': scheduler,
                       'interval': 'step',
-                      'monitor': 'val/nll',
+                      'monitor': 'val/loss',
                       'name': 'train/lr'}
     return [optimizer], [scheduler_dict]
 
@@ -358,7 +329,8 @@ class TrainerBase(L.LightningModule):
     return None
 
   @torch.no_grad()
-  def generate_samples(self, num_samples, num_steps=None, eps=None, prefix=None):
+  def generate_samples(self, num_samples, num_steps=None, eps=None, prefix=None,
+                       unmask_k=None):
     """Generate samples from the model using the new sampler system.
     
     Subclasses should not need to override this method if they have a 
@@ -366,6 +338,7 @@ class TrainerBase(L.LightningModule):
 
     Args:
       prefix: Optional list of 1-D token tensors (prompt-conditional generation).
+      unmask_k: Optional tokens written per sampling step (eval protocol k).
     """
     if num_steps is None:
       num_steps = self.config.sampling.steps
@@ -384,16 +357,17 @@ class TrainerBase(L.LightningModule):
     kwargs = dict(
       model=self, num_samples=num_samples, num_steps=num_steps,
       eps=eps, inject_bos=inject_bos)
+    params = inspect.signature(generate_fn).parameters
+    accepts_kw = any(
+      p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
     if prefix is not None:
-      params = inspect.signature(generate_fn).parameters
-      accepts_prefix = (
-        'prefix' in params
-        or any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()))
-      if not accepts_prefix:
+      if 'prefix' not in params and not accepts_kw:
         raise TypeError(
           f"{type(sampler).__name__}.generate does not support "
           "prefix-conditional sampling")
       kwargs['prefix'] = prefix
+    if unmask_k is not None and ('unmask_k' in params or accepts_kw):
+      kwargs['unmask_k'] = unmask_k
     return generate_fn(**kwargs)
 
   def _process_model_input(self, x0, valid_tokens):

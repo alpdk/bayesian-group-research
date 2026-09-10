@@ -143,32 +143,33 @@ def namespace_test_metrics(metrics: Dict[str, float], namespace: Optional[str]) 
   return out
 
 
+DEFAULT_PASS_AT_1_K = (1, 2, 4, 8)
+
+
+def pass_at_1_k_values(config: Any = None) -> List[int]:
+  """Tokens generated per sampling step; default ``[1, 2, 4, 8]``."""
+  eval_cfg = getattr(config, "eval", None) if config is not None else None
+  raw = getattr(eval_cfg, "pass_at_1_k", None) if eval_cfg is not None else None
+  if raw in (None, "", "null"):
+    return list(DEFAULT_PASS_AT_1_K)
+  return [int(x) for x in raw]
+
+
 def aggregate_task_metrics(
   records: Sequence[Dict[str, Any]],
   task: str,
   key_namespace: Optional[str] = None,
+  k: int = 1,
 ) -> Dict[str, float]:
-  """Return protocol ``test/`` task scalars from scored records."""
+  """Return protocol ``test/pass@1_k*`` from scored records."""
   n = len(records)
   if n == 0:
     return {}
-  match_ok = sum(1 for r in records if r.get("correct_match", r.get("correct")))
-  match_ext = sum(1 for r in records if r.get("extracted_match", r.get("extracted")))
-  metrics = {
-    "test/pass@1_match": match_ok / n,
-    "test/answer_extracted_frac": match_ext / n,
-  }
-  has_python = (
-    any("correct_pass1" in r or r.get("exec_error") is not None for r in records)
-    or task in {"tinygsm", "gsm8k-python"})
-  if has_python:
-    if any("correct_pass1" in r for r in records):
-      pass1_ok = sum(1 for r in records if r.get("correct_pass1"))
-    else:
-      pass1_ok = sum(1 for r in records if r.get("correct"))
-    errors = sum(1 for r in records if r.get("exec_error"))
-    metrics["test/pass@1"] = pass1_ok / n
-    metrics["test/exec_error_frac"] = errors / n
+  if any("correct_pass1" in r for r in records):
+    pass1_ok = sum(1 for r in records if r.get("correct_pass1"))
+  else:
+    pass1_ok = sum(1 for r in records if r.get("correct"))
+  metrics = {f"test/pass@1_k{int(k)}": pass1_ok / n}
   return namespace_test_metrics(metrics, key_namespace)
 
 
@@ -212,11 +213,15 @@ def load_task_split(
       cache_dir = os.path.dirname(cache)
       max_ex = 100000
       seed = 42
+      val_ratio = 0.02
       if config is not None:
         cache_dir = str(getattr(config.data, "cache_dir", cache_dir) or cache_dir)
         max_ex = int(getattr(config.data, "max_examples", max_ex) or max_ex)
         seed = int(getattr(config.data, "split_seed", seed) or seed)
-      _load_tinygsm_split(cache_dir, max_ex, val_ratio=0.02, seed=seed)
+        vr = getattr(config.data, "val_ratio", val_ratio)
+        if vr is not None:
+          val_ratio = float(vr)
+      _load_tinygsm_split(cache_dir, max_ex, val_ratio=val_ratio, seed=seed)
     ds = load_from_disk(cache)["test"]
     n = len(ds) if num_samples <= 0 else min(num_samples, len(ds))
     ds = ds.select(range(n))

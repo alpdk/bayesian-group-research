@@ -1,6 +1,4 @@
-# UNI-D2 MDLM TinyGSM shared-params (from examples/mdlm/tinygsm_shared_params.sh).
-# Launch from UNI-D2/: PYTHONPATH=src python -u -m discrete_diffusion + these overrides.
-
+# 80-example TinyGSM smoke (20 steps, 1 GPU). Not a comparison run.
 hydra:
   data: tinygsm
   algo: mdlm
@@ -8,9 +6,10 @@ hydra:
   sampling: default
   noise: log-linear
   lr_scheduler: constant_warmup
+  strategy: single-device
 
 sampling:
-  steps: 128
+  steps: 8
 
 model:
   length: 256
@@ -19,49 +18,54 @@ model:
   n_heads: 12
   dropout: 0.1
 
+data:
+  max_examples: 80
+  val_ratio: 0.2
+
 loader:
-  global_batch_size: 64
-  eval_global_batch_size: 32
-  num_workers: 4
+  global_batch_size: 8
+  eval_global_batch_size: 8
+  num_workers: 1
 
 trainer:
-  max_steps: 260000
-  val_check_interval: 2000
+  devices: 1
+  num_nodes: 1
+  max_steps: 20
+  val_check_interval: 10
   precision: bf16
   gradient_clip_val: 1.0
-  log_every_n_steps: 100
+  log_every_n_steps: 1
   num_sanity_val_steps: 0
 
 eval:
   task: tinygsm
-  transfer_task: gsm8k
-  task_num_samples: 32
+  transfer_task: null
+  task_num_samples: 4
   task_checkpoint_monitor: "test/pass@1_k1"
-  generate_samples: true
-  pass_at_1_k: [1, 2, 4, 8]
+  generate_samples: false
+  pass_at_1_k: [1]
 
 lr_scheduler:
-  num_warmup_steps: 500
+  num_warmup_steps: 2
 
 optim:
   lr: 3.0e-4
   weight_decay: 0.03
 
 training:
-  ema: 0.9999
+  ema: 0.0
 
 seed: 42
 
 wandb:
   project: edit-diffusion
   entity: alpdk-podkopaev
-  name: mdlm-tinygsm-L256-shared-params
-  group: shared-params
-  tags: [tinygsm, mdlm, shared-params, L256]
+  name: mdlm-tinygsm-smoke
+  group: smoke
 
 callbacks:
   checkpoint_every_n_steps:
-    every_n_train_steps: 2000
+    every_n_train_steps: 20
   early_stopping:
     patience: 9999
   sample_saver:
@@ -70,4 +74,4 @@ callbacks:
 checkpointing:
   resume_from_ckpt: false
 
-hydra_run_dir: ./outputs/tinygsm/mdlm-shared-params
+hydra_run_dir: ./outputs/smoke/mdlm-tinygsm

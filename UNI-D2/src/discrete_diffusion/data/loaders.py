@@ -68,10 +68,13 @@ def _load_tinygsm_split(
     if len(rows) >= max_examples:
       break
   full = datasets.Dataset.from_list(rows)
-  n_val = max(1, int(round(len(full) * val_ratio)))
-  n_val = min(n_val, len(full) - 1)
-  split = full.train_test_split(test_size=n_val, seed=seed, shuffle=True)
-  out = datasets.DatasetDict({"train": split["train"], "test": split["test"]})
+  if float(val_ratio) <= 0:
+    out = datasets.DatasetDict({"train": full, "test": full})
+  else:
+    n_val = max(1, int(round(len(full) * val_ratio)))
+    n_val = min(n_val, len(full) - 1)
+    split = full.train_test_split(test_size=n_val, seed=seed, shuffle=True)
+    out = datasets.DatasetDict({"train": split["train"], "test": split["test"]})
   LOGGER.info("Saving TinyGSM subset to: %s", raw_path)
   out.save_to_disk(raw_path)
   return out
@@ -318,10 +321,9 @@ def get_dataset(dataset_name,
   if use_chunking:
     map_kwargs["remove_columns"] = ["text"]
   if not streaming:
-    map_kwargs.update(
-      num_proc=num_proc,
-      load_from_cache_file=True,
-      desc="Tokenizing")
+    map_kwargs.update(load_from_cache_file=True, desc="Tokenizing")
+    if num_proc is not None and int(num_proc) > 1:
+      map_kwargs["num_proc"] = int(num_proc)
   tokenized_dataset = data.map(
     preprocess_and_tokenize,
     **map_kwargs)
@@ -350,9 +352,9 @@ def get_dataset(dataset_name,
 
     tokenized_dataset = tokenized_dataset.filter(
       _has_min_length,
-      num_proc=num_proc,
       load_from_cache_file=True,
-      desc="Filtering min length")
+      desc="Filtering min length",
+      **({"num_proc": int(num_proc)} if num_proc is not None and int(num_proc) > 1 else {}))
 
   if not wrap:
     if not streaming:
@@ -371,9 +373,9 @@ def get_dataset(dataset_name,
     chunked_dataset = tokenized_dataset.map(
       group_texts,
       batched=True,
-      num_proc=num_proc,
       load_from_cache_file=True,
-      desc="Grouping")
+      desc="Grouping",
+      **({"num_proc": int(num_proc)} if num_proc is not None and int(num_proc) > 1 else {}))
     chunked_dataset.save_to_disk(_path)
   chunked_dataset = chunked_dataset.with_format("torch")
   return chunked_dataset
@@ -437,7 +439,8 @@ def get_dataloaders(config, tokenizer, skip_train=False,
   train_chunking = config.data.get("train_chunking", default_chunking)
   valid_chunking = config.data.get("valid_chunking", default_chunking)
   max_examples = config.data.get("max_examples", None)
-  val_ratio = float(config.data.get("val_ratio", 0.02) or 0.02)
+  val_ratio_raw = config.data.get("val_ratio", 0.02)
+  val_ratio = 0.02 if val_ratio_raw is None else float(val_ratio_raw)
   split_seed = int(config.data.get("split_seed", config.get("seed", 42)) or 42)
   extra_ds = dict(
     max_examples=max_examples, val_ratio=val_ratio, split_seed=split_seed)

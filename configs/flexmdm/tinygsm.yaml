@@ -7,7 +7,7 @@ hydra:
   model: flexmdm_anyorder
   sampling: default
   noise: linear
-  lr_scheduler: cosine_decay_warmup
+  lr_scheduler: constant_warmup
 
 sampling:
   steps: 128
@@ -38,11 +38,10 @@ eval:
   task_num_samples: 32
   task_checkpoint_monitor: "test/pass@1_k1"
   generate_samples: true
+  pass_at_1_k: [1, 2, 4, 8]
 
 lr_scheduler:
-  warmup_t: 500
-  warmup_lr_init: 1.0e-6
-  lr_min: 0.0
+  num_warmup_steps: 500
 
 optim:
   lr: 3.0e-4

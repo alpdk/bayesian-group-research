@@ -20,9 +20,11 @@ import torch.nn.functional as F
 from tqdm import tqdm
 
 from eval_task import (
+    DEFAULT_PASS_AT_1_K,
     aggregate_task_metrics,
     score_gsm8k_python_record,
     score_gsm8k_record,
+    score_tinygsm_record,
 )
 try:
     from eval_task import score_apps_record
@@ -192,7 +194,8 @@ def evaluate(model, dataset: CodeGenDataset, coupling, tok, scheduler, device,
 
 def evaluate_task(model, dataset: CodeGenDataset, tok, scheduler, device,
                   num_samples: int, num_steps: int, batch_size: int, seed: int,
-                  task: str = "gsm8k"):
+                  task: str = "gsm8k", key_namespace: str | None = None,
+                  ks=None):
     """Prompt-conditional generate + protocol test/ scoring."""
     if num_samples <= 0 or len(dataset) == 0:
         return {}, []
@@ -200,50 +203,68 @@ def evaluate_task(model, dataset: CodeGenDataset, tok, scheduler, device,
 
     n = min(num_samples, len(dataset))
     model.eval()
-    records = []
-    torch.manual_seed(seed)
+    k_values = [int(k) for k in (ks if ks is not None else DEFAULT_PASS_AT_1_K)]
     t0 = time.perf_counter()
-    with torch.no_grad():
-        for i in range(0, n, batch_size):
-            sl = slice(i, min(i + batch_size, n))
-            prompt = pad_stack(dataset.prompts[sl], tok.pad_token).to(device)
-            x_final = euler_sample(
-                model, tok, prompt, scheduler,
-                num_steps=num_steps, max_gen_len=min(512, model.max_seq_len),
-                device=device, show_progress=False)
-            for j, idx in enumerate(range(sl.start, sl.stop)):
-                gen = tok.decode(x_final[j])
-                prompt_text, gold_text = dataset.texts[idx]
-                if task in {"apps", "taco"}:
-                    if score_apps_record is None:
-                        raise RuntimeError("APPS/TACO eval requires score_apps_record in eval_task.py")
-                    py = score_apps_record(gen, gold_text)
-                    match = {
-                        "correct": py.get("correct"),
-                        "extracted": py.get("extracted"),
-                        "extracted_answer": py.get("extracted_answer"),
-                        "gold": py.get("gold", gold_text),
-                    }
-                else:
-                    match = score_gsm8k_record(gen, gold_text)
-                    py = score_gsm8k_python_record(gen, gold_text)
-                records.append({
-                    "prompt": prompt_text,
-                    "generation": gen,
-                    "gold": match["gold"],
-                    "extracted_answer": match["extracted_answer"],
-                    "correct": match["correct"],
-                    "extracted": match["extracted"],
-                    "correct_match": match["correct"],
-                    "extracted_match": match["extracted"],
-                    "correct_pass1": py["correct"],
-                    "exec_error": py["exec_error"],
-                    "length": len(gen),
-                })
-    metrics = aggregate_task_metrics(records, task=task)
+    metrics = {}
+    artifact_records = []
+
+    def _score_one(max_edits: int):
+        records = []
+        torch.manual_seed(seed)
+        with torch.no_grad():
+            for i in range(0, n, batch_size):
+                sl = slice(i, min(i + batch_size, n))
+                prompt = pad_stack(dataset.prompts[sl], tok.pad_token).to(device)
+                x_final = euler_sample(
+                    model, tok, prompt, scheduler,
+                    num_steps=num_steps, max_gen_len=min(512, model.max_seq_len),
+                    device=device, show_progress=False,
+                    max_edits_per_step=max_edits)
+                for j, idx in enumerate(range(sl.start, sl.stop)):
+                    gen = tok.decode(x_final[j])
+                    prompt_text, gold_text = dataset.texts[idx]
+                    if task in {"apps", "taco"}:
+                        if score_apps_record is None:
+                            raise RuntimeError("APPS/TACO eval requires score_apps_record in eval_task.py")
+                        py = score_apps_record(gen, gold_text)
+                        match = {
+                            "correct": py.get("correct"),
+                            "extracted": py.get("extracted"),
+                            "extracted_answer": py.get("extracted_answer"),
+                            "gold": py.get("gold", gold_text),
+                        }
+                    elif task == "tinygsm":
+                        match = score_tinygsm_record(gen, gold_text)
+                        py = match
+                    else:
+                        match = score_gsm8k_record(gen, gold_text)
+                        py = score_gsm8k_python_record(gen, gold_text)
+                    records.append({
+                        "prompt": prompt_text,
+                        "generation": gen,
+                        "gold": match["gold"],
+                        "extracted_answer": match["extracted_answer"],
+                        "correct": match["correct"],
+                        "extracted": match["extracted"],
+                        "correct_match": match["correct"],
+                        "extracted_match": match["extracted"],
+                        "correct_pass1": py["correct"],
+                        "exec_error": py.get("exec_error"),
+                        "length": len(gen),
+                    })
+        return records
+
+    for k in k_values:
+        records = _score_one(k)
+        metrics.update(aggregate_task_metrics(
+            records, task=task, key_namespace=key_namespace, k=k))
+        if k == 1:
+            artifact_records = records
+    if not artifact_records:
+        artifact_records = records
     metrics["perf/test_s"] = time.perf_counter() - t0
     model.train()
-    return metrics, records
+    return metrics, artifact_records
 
 
 def build_coupling(name: str, tok: ByteTokenizer, max_target_len: int) -> Coupling:
@@ -333,7 +354,9 @@ def main():
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--weight-decay", type=float, default=0.0)
     parser.add_argument("--warmup-steps", type=int, default=0,
-                        help="Linear LR warmup steps followed by cosine decay to 0 at --steps (0 = constant LR)")
+                        help="Linear LR warmup steps (0 = no warmup)")
+    parser.add_argument("--lr-schedule", type=str, default="constant",
+                        help="constant: hold peak LR after warmup; cosine: decay to 0 by --steps")
     parser.add_argument("--hidden-dim", type=int, default=512)
     parser.add_argument("--num-layers", type=int, default=8)
     parser.add_argument("--num-heads", type=int, default=8)
@@ -367,6 +390,8 @@ def main():
                         help="GSM8K generations to score each val (0 disables task eval)")
     parser.add_argument("--task-eval-steps", type=int, default=128,
                         help="Euler steps for in-training task eval")
+    parser.add_argument("--pass-at-1-k", nargs="+", type=int, default=list(DEFAULT_PASS_AT_1_K),
+                        help="Tokens emitted per Euler step for test/pass@1_k*")
     parser.add_argument("--wandb-project", type=str, default=None,
                         help="Log metrics to this wandb project (default: wandb disabled)")
     parser.add_argument("--wandb-name", type=str, default=None, help="wandb run name")
@@ -413,8 +438,11 @@ def main():
                        keep_docstring=args.keep_docstring)
 
     val_pairs = None
+    overfit_same_split = args.val_every > 0 and float(args.val_ratio) <= 0
     if args.val_every > 0:
-        if args.dataset in {"gsm8k", "apps", "taco"}:
+        if overfit_same_split:
+            val_pairs = list(pairs)
+        elif args.dataset in {"gsm8k", "apps", "taco"}:
             val_pairs = load_pairs(args.dataset, split="test")
         else:
             n_val = max(1, int(len(pairs) * args.val_ratio))
@@ -423,9 +451,19 @@ def main():
             pairs = [pairs[i] for i in split_idx[n_val:]]
 
     dataset = CodeGenDataset(pairs, tok, args.max_prompt_len, args.max_target_len)
+    if overfit_same_split and len(dataset) > 0:
+        n_keep = min(len(dataset), max(int(args.task_eval_samples or 5), 1))
+        if len(dataset) > n_keep:
+            dataset.prompts = dataset.prompts[:n_keep]
+            dataset.targets = dataset.targets[:n_keep]
+            dataset.texts = dataset.texts[:n_keep]
+            print(f"Overfit cap: keeping first {n_keep} length-filtered examples")
     val_dataset = (CodeGenDataset(val_pairs, tok, args.max_prompt_len, args.max_target_len)
                    if val_pairs is not None else None)
+    if overfit_same_split:
+        val_dataset = dataset
     task_dataset = None
+    transfer_dataset = None
     task_name = args.dataset if args.dataset in {"gsm8k", "tinygsm", "apps", "taco"} else "gsm8k"
     if args.task_eval_samples > 0:
         if args.dataset in {"apps", "taco"}:
@@ -433,6 +471,12 @@ def main():
             task_dataset = CodeGenDataset(
                 task_pairs, tok, args.max_prompt_len, args.max_target_len,
                 filter_target=False)
+        elif args.dataset == "tinygsm":
+            task_dataset = dataset if overfit_same_split else val_dataset
+            if not overfit_same_split:
+                gsm8k_task_pairs = load_pairs("gsm8k", split="test")
+                transfer_dataset = CodeGenDataset(
+                    gsm8k_task_pairs, tok, args.max_prompt_len, args.max_target_len)
         else:
             gsm8k_task_pairs = load_pairs("gsm8k", split="test")
             task_dataset = CodeGenDataset(
@@ -463,12 +507,15 @@ def main():
                               betas=(0.9, 0.999), eps=1e-8)
     if ckpt is not None and ckpt.get("optimizer_state_dict"):
         optim.load_state_dict(ckpt["optimizer_state_dict"])
-    if args.warmup_steps > 0:
-        def lr_lambda(s):
-            if s < args.warmup_steps:
-                return (s + 1) / args.warmup_steps
-            progress = (s - args.warmup_steps) / max(1, args.steps - args.warmup_steps)
-            return 0.5 * (1 + math.cos(math.pi * progress))
+    schedule = str(getattr(args, "lr_schedule", "constant") or "constant").lower()
+    if args.warmup_steps > 0 or schedule in {"cosine", "cosine_decay_warmup"}:
+        def lr_lambda(s, warmup=args.warmup_steps, kind=schedule, total=args.steps):
+            if warmup > 0 and s < warmup:
+                return (s + 1) / warmup
+            if kind in {"cosine", "cosine_decay_warmup"}:
+                progress = (s - warmup) / max(1, total - warmup)
+                return 0.5 * (1 + math.cos(math.pi * progress))
+            return 1.0
         lr_sched = torch.optim.lr_scheduler.LambdaLR(optim, lr_lambda)
     else:
         lr_sched = None
@@ -486,7 +533,8 @@ def main():
 
     print(f"Model parameters: {sum(p.numel() for p in model.parameters() if p.requires_grad):,}")
     print(f"precision={'bf16' if use_bf16 else 'fp32'} grad_clip={args.grad_clip} "
-          f"t_eps={args.t_eps} val_every={args.val_every} warmup={args.warmup_steps}")
+          f"t_eps={args.t_eps} val_every={args.val_every} "
+          f"warmup={args.warmup_steps} lr_schedule={schedule}")
 
     coupling = build_coupling(args.coupling, tok, args.max_target_len)
     scheduler = CubicScheduler(a=args.scheduler_a, b=args.scheduler_b)
@@ -590,7 +638,7 @@ def main():
             metrics["val_loss"].append(val_loss)
             metrics["val_step"].append(step + 1)
             val_payload = {
-                "val/nll": val_loss,
+                "val/loss": val_loss,
                 "perf/val_step_s": val_s,
             }
             task_metrics, task_records = {}, []
@@ -601,19 +649,45 @@ def main():
                     num_steps=args.task_eval_steps,
                     batch_size=min(args.batch_size, 8),
                     seed=args.seed + 2,
-                    task=task_name)
+                    task=task_name,
+                    ks=args.pass_at_1_k)
                 val_payload.update(task_metrics)
+                n_ok = sum(1 for rec in task_records if rec.get("correct"))
+                print(
+                    f"Task eval step {step + 1}: {n_ok}/{len(task_records)} "
+                    f"correct; {task_metrics}")
+                for i, rec in enumerate(task_records[:8]):
+                    gen = (rec.get("generation") or "").replace("\n", "\\n")
+                    print(
+                        f"  [{i}] correct={rec.get('correct')} "
+                        f"extracted={rec.get('extracted_answer')!r} "
+                        f"gen={gen[:240]!r}")
+                if transfer_dataset is not None:
+                    transfer_metrics, transfer_records = evaluate_task(
+                        model, transfer_dataset, tok, scheduler, device,
+                        num_samples=args.task_eval_samples,
+                        num_steps=args.task_eval_steps,
+                        batch_size=min(args.batch_size, 8),
+                        seed=args.seed + 3,
+                        task="gsm8k",
+                        key_namespace="gsm8k",
+                        ks=args.pass_at_1_k)
+                    val_payload.update(transfer_metrics)
+                    task_records = task_records + transfer_records
+                    if "perf/test_s" in task_metrics and "perf/test_s" in transfer_metrics:
+                        val_payload["perf/test_s"] = (
+                            task_metrics["perf/test_s"] + transfer_metrics["perf/test_s"])
             if wandb_run is not None:
                 wandb_run.log(val_payload, step=step + 1)
-                wandb_run.summary["best_val_nll"] = min(best_val, val_loss) if math.isfinite(best_val) else val_loss
-                if "test/pass@1_match" in task_metrics:
-                    prev = wandb_run.summary.get("best_test_pass@1_match")
-                    if prev is None or task_metrics["test/pass@1_match"] > float(prev):
-                        wandb_run.summary["best_test_pass@1_match"] = task_metrics["test/pass@1_match"]
-                if "test/pass@1" in task_metrics:
-                    prev = wandb_run.summary.get("best_test_pass@1")
-                    if prev is None or task_metrics["test/pass@1"] > float(prev):
-                        wandb_run.summary["best_test_pass@1"] = task_metrics["test/pass@1"]
+                wandb_run.summary["best_val_loss"] = min(best_val, val_loss) if math.isfinite(best_val) else val_loss
+                if "test/pass@1_k1" in task_metrics:
+                    prev = wandb_run.summary.get("best_test_pass@1_k1")
+                    if prev is None or task_metrics["test/pass@1_k1"] > float(prev):
+                        wandb_run.summary["best_test_pass@1_k1"] = task_metrics["test/pass@1_k1"]
+                if "test/gsm8k/pass@1_k1" in val_payload:
+                    prev = wandb_run.summary.get("best_test_gsm8k_pass@1_k1")
+                    if prev is None or val_payload["test/gsm8k/pass@1_k1"] > float(prev):
+                        wandb_run.summary["best_test_gsm8k_pass@1_k1"] = val_payload["test/gsm8k/pass@1_k1"]
                 # if task_records:
                 #     wandb_run.log({
                 #         "val/samples": wandb.Table(
@@ -628,31 +702,31 @@ def main():
                 #             ] for rec in task_records[:16]],
                 #         ),
                 #     }, step=step + 1)
-            em = task_metrics.get("test/pass@1_match")
+            em = task_metrics.get("test/pass@1_k1")
             if em is not None and em > best_task:
                 best_task = em
                 save_checkpoint(
                     save_dir / "model_best_task.pt", model, optim,
                     extra={**ckpt_extra, "step": step + 1, "val_loss": val_loss,
-                           "val_pass@1_match": em})
+                           "val_pass@1_k1": em})
             if val_loss < best_val - args.min_delta:
                 best_val = val_loss
                 bad_evals = 0
                 save_checkpoint(save_dir / "model_best.pt", model, optim,
                                 extra={**ckpt_extra, "step": step + 1, "val_loss": val_loss})
-                pbar.write(f"step {step + 1}: val/nll={val_loss:.2f} (new best"
-                           + (f", test/pass@1_match={em:.3f}" if em is not None else "")
+                pbar.write(f"step {step + 1}: val/loss={val_loss:.2f} (new best"
+                           + (f", test/pass@1_k1={em:.3f}" if em is not None else "")
                            + ")")
             else:
                 bad_evals += 1
-                pbar.write(f"step {step + 1}: val/nll={val_loss:.2f} "
+                pbar.write(f"step {step + 1}: val/loss={val_loss:.2f} "
                            f"(best {best_val:.2f}, no improvement {bad_evals}/{args.patience}"
-                           + (f", test/pass@1_match={em:.3f}" if em is not None else "")
+                           + (f", test/pass@1_k1={em:.3f}" if em is not None else "")
                            + ")")
             past_warmup = (step + 1) > max(args.warmup_steps, args.val_every)
             if past_warmup and bad_evals >= args.patience:
                 pbar.write(f"Early stopping at step {step + 1}: "
-                           f"no val/nll improvement in {args.patience} validations")
+                           f"no val/loss improvement in {args.patience} validations")
                 stopped_early = True
 
         if (step + 1) % args.save_every == 0 or step == args.steps - 1 or stopped_early:
@@ -665,14 +739,14 @@ def main():
 
     print(f"Done. Checkpoint and metrics saved to {save_dir}/")
     if val_dataset is not None:
-        print(f"Best val/nll: {best_val:.2f} (checkpoint: {save_dir}/model_best.pt)")
+        print(f"Best val/loss: {best_val:.2f} (checkpoint: {save_dir}/model_best.pt)")
         if best_task >= 0:
-            print(f"Best test/pass@1_match: {best_task:.3f} (checkpoint: {save_dir}/model_best_task.pt)")
+            print(f"Best test/pass@1_k1: {best_task:.3f} (checkpoint: {save_dir}/model_best_task.pt)")
     if wandb_run is not None:
         if val_dataset is not None:
-            wandb_run.summary["best_val_nll"] = best_val
+            wandb_run.summary["best_val_loss"] = best_val
             if best_task >= 0:
-                wandb_run.summary["best_test_pass@1_match"] = best_task
+                wandb_run.summary["best_test_pass@1_k1"] = best_task
         wandb_run.finish()
 
 

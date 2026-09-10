@@ -331,15 +331,10 @@ def main(cfg: DictConfig):
                     payload = {}
                     for key, value in val_acc_dict.items():
                         print(f"Epoch {epoch+1}, Step {global_step}, Validation Accuracy {key}: {value}")
-                        if isinstance(value, (int, float)):
-                            if key == "top_k_unmasking_2":
-                                payload["test/pass@1"] = float(value)
-                            elif key == "top_k_unmasking_3":
-                                payload["test/pass@1_k3"] = float(value)
-                    if "test/pass@1" not in payload and val_acc_dict:
-                        first = next(iter(val_acc_dict.values()), None)
-                        if isinstance(first, (int, float)):
-                            payload["test/pass@1"] = float(first)
+                        if isinstance(value, (int, float)) and key.startswith("top_k_unmasking_"):
+                            suffix = key[len("top_k_unmasking_"):]
+                            if suffix in {"1", "2", "4", "8"}:
+                                payload[f"test/pass@1_k{suffix}"] = float(value)
                     if cfg.wandb.wandb and payload:
                         wandb.log(payload, step=global_step)
                     

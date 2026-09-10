@@ -16,13 +16,12 @@ from torch.utils.data import Subset
 from typing import Optional, List, Tuple, Union
 from torch.utils.data.distributed import DistributedSampler
 from torch.nn.parallel import DistributedDataParallel as DDP
-from transformers import get_cosine_schedule_with_warmup
+from transformers import get_constant_schedule_with_warmup, get_cosine_schedule_with_warmup
 from omegaconf import OmegaConf, DictConfig, ListConfig
 from model.ema import ExponentialMovingAverage, save_ema_snapshot, save_model_snapshot
 from progressive import PhasedMasking, mdm_loss_fn
 from eval.sudoku_eval import evaluate_ddp_sudoku
 from eval.gsm8k_eval import evaluate_ddp_gsm8k
-from eval.code_eval import evaluate_ddp_code_qa
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -67,31 +66,41 @@ def grad_norm(parameters):
 
 
 def nll_family(nll: float) -> dict:
-    return {"val/nll": float(nll)}
+    return {"val/loss": float(nll)}
+
+
+def namespace_test_metrics(metrics: dict, namespace: Optional[str]) -> dict:
+    if not namespace:
+        return metrics
+    out = {}
+    for key, value in metrics.items():
+        if key.startswith("test/"):
+            out[f"test/{namespace}/{key[len('test/'):]}"] = value
+        else:
+            out[key] = value
+    return out
 
 
 def test_metrics_from_acc(val_acc_dict: dict) -> dict:
     if not val_acc_dict:
         return {}
     out = {}
-    k2 = val_acc_dict.get("top_k_unmasking_2")
-    if k2 is not None:
-        out["test/pass@1"] = float(k2)
-    k3 = val_acc_dict.get("top_k_unmasking_3")
-    if k3 is not None:
-        out["test/pass@1_k3"] = float(k3)
-    if "test/pass@1" not in out:
-        first = next(iter(val_acc_dict.values()), None)
-        if isinstance(first, (int, float)):
-            out["test/pass@1"] = float(first)
+    for k in (1, 2, 4, 8):
+        value = val_acc_dict.get(f"top_k_unmasking_{k}")
+        if value is not None:
+            out[f"test/pass@1_k{k}"] = float(value)
     return out
 
 def evaluate_ddp(model, cfg, device, rank: int, world_size: int, sampling):
     if cfg.data.dataset == "sudoku":
         return evaluate_ddp_sudoku(model, cfg, device, rank, world_size, sampling)
     elif cfg.data.dataset == "tinygsm":
+        if bool(getattr(cfg.validation, "eval_train", False)):
+            from eval.gsm8k_eval import evaluate_ddp_tinygsm_packed
+            return evaluate_ddp_tinygsm_packed(model, cfg, device, rank, world_size, sampling)
         return evaluate_ddp_gsm8k(model, cfg, device, rank, world_size, sampling)
     elif cfg.data.dataset in {"apps", "taco"}:
+        from eval.code_eval import evaluate_ddp_code_qa
         return evaluate_ddp_code_qa(model, cfg, device, rank, world_size, sampling)
     else:
         raise ValueError(f"Invalid dataset: {cfg.data.dataset}")
@@ -331,7 +340,16 @@ def main(cfg: DictConfig, resume_path: str = None):
     # optimizer and scheduler
     optimizer = optim.AdamW(model.parameters(), lr=train_cfg.learning_rate, weight_decay=train_cfg.weight_decay)
     num_training_steps = train_cfg.num_epochs * len(train_loader)
-    scheduler = get_cosine_schedule_with_warmup(optimizer, num_warmup_steps=train_cfg.warmup_steps, num_training_steps=num_training_steps)
+    lr_schedule = str(getattr(train_cfg, "lr_schedule", "constant")).lower()
+    warmup_steps = int(getattr(train_cfg, "warmup_steps", 0) or 0)
+    if lr_schedule in {"cosine", "cosine_decay_warmup"}:
+        scheduler = get_cosine_schedule_with_warmup(
+            optimizer, num_warmup_steps=warmup_steps, num_training_steps=num_training_steps)
+    elif lr_schedule in {"constant", "constant_warmup", "warmup_constant"}:
+        scheduler = get_constant_schedule_with_warmup(
+            optimizer, num_warmup_steps=warmup_steps)
+    else:
+        raise ValueError(f"unknown training.lr_schedule: {lr_schedule}")
     if train_cfg.ema is not None:
         assert 0.0 < train_cfg.ema < 1.0, "EMA decay must be between 0 and 1"
         model_to_ema = model.module if isinstance(model, DDP) else model
@@ -430,6 +448,8 @@ def main(cfg: DictConfig, resume_path: str = None):
     if cfg.wandb.wandb and is_main:
         wandb_kwargs = dict(
             project=cfg.wandb.project, name=cfg.wandb.name, entity=cfg.wandb.entity)
+        if cfg.wandb.get("group"):
+            wandb_kwargs["group"] = cfg.wandb.group
         run_id = os.environ.get("WANDB_RUN_ID")
         if run_id:
             wandb_kwargs["id"] = run_id
@@ -567,7 +587,14 @@ def main(cfg: DictConfig, resume_path: str = None):
                             print(f"Epoch {epoch+1}, Step {global_step}, Validation Accuracy {key}: {value}")
                     print(f"Epoch {epoch+1}, Step {global_step}, Validation Loss: {val_loss}")
                     if cfg.wandb.wandb:
-                        payload = {**nll_family(val_loss), **test_metrics_from_acc(val_acc_dict or {})}
+                        test_metrics = test_metrics_from_acc(val_acc_dict or {})
+                        if cfg.data.dataset == "tinygsm" and not bool(
+                                getattr(cfg.validation, "eval_train", False)):
+                            test_metrics = {
+                                **test_metrics,
+                                **namespace_test_metrics(test_metrics, "gsm8k"),
+                            }
+                        payload = {**nll_family(val_loss), **test_metrics}
                         payload["perf/val_step_s"] = val_s
                         if test_s > 0:
                             payload["perf/test_s"] = test_s

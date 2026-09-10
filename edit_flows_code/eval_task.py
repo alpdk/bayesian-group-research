@@ -12,7 +12,10 @@ _SRC = Path(__file__).resolve().parents[1] / "src"
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
-from discrete_diffusion.evaluations.code_exec import score_apps_record
+try:
+    from discrete_diffusion.evaluations.code_exec import score_apps_record
+except ImportError:
+    score_apps_record = None
 
 GSM8K_ANSWER_RE = re.compile(r"####\s*([-\d.,]+)")
 _NUMBER_RE = re.compile(r"[-+]?\d[\d,]*\.?\d*")
@@ -111,28 +114,34 @@ def score_gsm8k_python_record(generation: str, gold: str, timeout: float = 5.0) 
     }
 
 
+def namespace_test_metrics(metrics: Dict[str, float], namespace: Optional[str]) -> Dict[str, float]:
+    """Move ``test/foo`` → ``test/{namespace}/foo`` for a secondary eval task."""
+    if not namespace:
+        return metrics
+    out = {}
+    for key, value in metrics.items():
+        if key.startswith("test/"):
+            out[f"test/{namespace}/{key[len('test/'):]}"] = value
+        else:
+            out[key] = value
+    return out
+
+
+DEFAULT_PASS_AT_1_K = (1, 2, 4, 8)
+
+
 def aggregate_task_metrics(
     records: Sequence[Dict[str, Any]],
     task: str = "gsm8k",
+    key_namespace: Optional[str] = None,
+    k: int = 1,
 ) -> Dict[str, float]:
     n = len(records)
     if n == 0:
         return {}
-    match_ok = sum(1 for rec in records if rec.get("correct_match", rec.get("correct")))
-    match_ext = sum(1 for rec in records if rec.get("extracted_match", rec.get("extracted")))
-    metrics = {
-        "test/pass@1_match": match_ok / n,
-        "test/answer_extracted_frac": match_ext / n,
-    }
-    has_python = (
-        any("correct_pass1" in rec or rec.get("exec_error") is not None for rec in records)
-    or task in {"tinygsm", "apps", "taco"})
-    if has_python:
-        if any("correct_pass1" in rec for rec in records):
-            pass1_ok = sum(1 for rec in records if rec.get("correct_pass1"))
-        else:
-            pass1_ok = sum(1 for rec in records if rec.get("correct"))
-        errors = sum(1 for rec in records if rec.get("exec_error"))
-        metrics["test/pass@1"] = pass1_ok / n
-        metrics["test/exec_error_frac"] = errors / n
-    return metrics
+    if any("correct_pass1" in rec for rec in records):
+        pass1_ok = sum(1 for rec in records if rec.get("correct_pass1"))
+    else:
+        pass1_ok = sum(1 for rec in records if rec.get("correct"))
+    metrics = {f"test/pass@1_k{int(k)}": pass1_ok / n}
+    return namespace_test_metrics(metrics, key_namespace)

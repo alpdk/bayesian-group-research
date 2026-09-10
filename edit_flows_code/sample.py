@@ -18,6 +18,7 @@ import torch
 from tqdm import tqdm
 
 from eval_task import (
+    DEFAULT_PASS_AT_1_K,
     aggregate_task_metrics,
     extract_gsm8k_answer,
     score_apps_record,
@@ -103,6 +104,22 @@ def get_adaptive_h(h: float, t: torch.Tensor, scheduler: KappaScheduler):
     return torch.minimum(_h, coeff)
 
 
+def _cap_edits_per_step(ins_mask, del_mask, sub_mask, lambda_ins, lambda_del, lambda_sub, k):
+    stacked = torch.stack([
+        lambda_ins.masked_fill(~ins_mask, float("-inf")),
+        lambda_del.masked_fill(~del_mask, float("-inf")),
+        lambda_sub.masked_fill(~sub_mask, float("-inf")),
+    ], dim=-1)
+    bsz, length, n_kind = stacked.shape
+    flat = stacked.reshape(bsz, length * n_kind)
+    keep_k = min(max(int(k), 1), length * n_kind)
+    topv, topi = flat.topk(keep_k, dim=-1)
+    keep = torch.zeros_like(flat, dtype=torch.bool)
+    keep.scatter_(1, topi, torch.isfinite(topv))
+    keep = keep.view(bsz, length, n_kind)
+    return keep[..., 0], keep[..., 1], keep[..., 2]
+
+
 @torch.no_grad()
 def euler_sample(
     model,
@@ -113,6 +130,7 @@ def euler_sample(
     max_gen_len: int = 512,
     device: torch.device = torch.device("cpu"),
     show_progress: bool = True,
+    max_edits_per_step: int | None = None,
 ):
     """Transports x_0 = [BOS] to a sample of the target distribution via Euler steps."""
     model.eval()
@@ -127,6 +145,9 @@ def euler_sample(
     pbar = tqdm(desc="Euler sampling", disable=not show_progress)
     n_iter = 0
     max_iters = max(num_steps * 4, num_steps + 1)
+    if max_edits_per_step is not None:
+        k_cap = max(int(max_edits_per_step), 1)
+        max_iters = max(max_iters, (max_gen_len + k_cap - 1) // k_cap + 8)
     while float(t.max()) <= 1 - default_h and n_iter < max_iters:
         n_iter += 1
         x_pad_mask = (x_t == tok.pad_token)
@@ -160,6 +181,10 @@ def euler_sample(
         sub_mask[:, 0] = False
         if x_t.shape[1] >= max_gen_len:
             ins_mask[:] = False
+        if max_edits_per_step is not None:
+            ins_mask, del_mask, sub_mask = _cap_edits_per_step(
+                ins_mask, del_mask, sub_mask,
+                lambda_ins, lambda_del, lambda_sub, max_edits_per_step)
 
         ins_tokens = torch.full(ins_probs.shape[:2], tok.pad_token, dtype=torch.long, device=device)
         sub_tokens = torch.full(sub_probs.shape[:2], tok.pad_token, dtype=torch.long, device=device)
@@ -213,6 +238,8 @@ def main():
     parser.add_argument("--wandb-name", type=str, default=None)
     parser.add_argument("--wandb-id", type=str, default=None,
                         help="Resume this W&B run id (logs eval onto an existing train run)")
+    parser.add_argument("--pass-at-1-k", nargs="+", type=int, default=list(DEFAULT_PASS_AT_1_K),
+                        help="Tokens emitted per Euler step for test/pass@1_k*")
     args = parser.parse_args()
 
     torch.manual_seed(args.seed)
@@ -259,62 +286,73 @@ def main():
         print(f"Truncating {n_trunc}/{len(questions)} prompts to {max_prompt_len} bytes (model max_seq_len={model.max_seq_len})")
 
     from data import pad_stack
+    ks = [int(k) for k in args.pass_at_1_k]
+    metrics = {}
     records = []
     verbose = len(questions) <= 32
-    for start in range(0, len(questions), args.batch_size):
-        batch_q = questions[start:start + args.batch_size]
-        prompt = pad_stack([tok.encode(q)[:max_prompt_len] for q in batch_q], tok.pad_token)
-        x_final = euler_sample(
-            model, tok, prompt, scheduler,
-            num_steps=args.num_steps, max_gen_len=args.max_gen_len, device=device)
-        for i, q in enumerate(batch_q):
-            gen = tok.decode(x_final[i])
-            gold = gold_texts[start + i]
-            match = score_gsm8k_record(gen, gold)
-            if task_name == "tinygsm":
-                py = score_tinygsm_record(gen, gold)
-            elif task_name in {"apps", "taco"}:
-                py = score_apps_record(gen, gold)
-                match = {
-                    "correct": py.get("correct"),
-                    "extracted": py.get("extracted"),
-                    "extracted_answer": py.get("extracted_answer"),
-                    "gold": py.get("gold", gold),
+    for k in ks:
+        k_records = []
+        torch.manual_seed(args.seed)
+        for start in range(0, len(questions), args.batch_size):
+            batch_q = questions[start:start + args.batch_size]
+            prompt = pad_stack([tok.encode(q)[:max_prompt_len] for q in batch_q], tok.pad_token)
+            x_final = euler_sample(
+                model, tok, prompt, scheduler,
+                num_steps=args.num_steps, max_gen_len=args.max_gen_len, device=device,
+                max_edits_per_step=k)
+            for i, q in enumerate(batch_q):
+                gen = tok.decode(x_final[i])
+                gold = gold_texts[start + i]
+                match = score_gsm8k_record(gen, gold)
+                if task_name == "tinygsm":
+                    py = score_tinygsm_record(gen, gold)
+                elif task_name in {"apps", "taco"}:
+                    py = score_apps_record(gen, gold)
+                    match = {
+                        "correct": py.get("correct"),
+                        "extracted": py.get("extracted"),
+                        "extracted_answer": py.get("extracted_answer"),
+                        "gold": py.get("gold", gold),
+                    }
+                else:
+                    py = score_gsm8k_python_record(gen, gold)
+                primary = match if task_name == "gsm8k" else py
+                record = {
+                    "question": q,
+                    "generation": gen,
+                    "gold_answer": gold,
+                    "extracted_answer": primary["extracted_answer"],
+                    "correct": primary["correct"],
+                    "extracted": primary["extracted"],
+                    "correct_match": match["correct"],
+                    "extracted_match": match["extracted"],
+                    "correct_pass1": py["correct"],
+                    "exec_error": py.get("exec_error"),
+                    "k": k,
                 }
-            else:
-                py = score_gsm8k_python_record(gen, gold)
-            primary = match if task_name == "gsm8k" else py
-            record = {
-                "question": q,
-                "generation": gen,
-                "gold_answer": gold,
-                "extracted_answer": primary["extracted_answer"],
-                "correct": primary["correct"],
-                "extracted": primary["extracted"],
-                "correct_match": match["correct"],
-                "extracted_match": match["extracted"],
-                "correct_pass1": py["correct"],
-                "exec_error": py.get("exec_error"),
-            }
-            if args.execute:
-                record["executed_answer"] = execute_tinygsm(gen)
-            records.append(record)
-            if verbose:
-                print("=" * 80)
-                print(f"Q: {q}")
-                print(f"--- generation ---\n{gen}")
-                print(f"--- gold: {record.get('extracted_answer')}, correct: {record['correct']}")
-        done = min(start + args.batch_size, len(questions))
-        acc = sum(r["correct"] for r in records) / len(records)
-        print(f"  {done}/{len(questions)}  acc={acc:.4f}", flush=True)
-
-    metrics = aggregate_task_metrics(records, task_name)
+                if args.execute:
+                    record["executed_answer"] = execute_tinygsm(gen)
+                k_records.append(record)
+                if verbose and k == ks[0]:
+                    print("=" * 80)
+                    print(f"Q: {q}")
+                    print(f"--- generation ---\n{gen}")
+                    print(f"--- gold: {record.get('extracted_answer')}, correct: {record['correct']}")
+            done = min(start + args.batch_size, len(questions))
+            acc = sum(r["correct"] for r in k_records) / len(k_records)
+            print(f"  k={k} {done}/{len(questions)}  acc={acc:.4f}", flush=True)
+        metrics.update(aggregate_task_metrics(k_records, task_name, k=k))
+        if k == 1 or not records:
+            records = k_records
     if metrics:
-        n_ok = int(round(metrics["test/pass@1_match"] * len(records)))
-        print(f"\nAccuracy: {metrics['test/pass@1_match']:.2%} ({n_ok}/{len(records)})")
-        print(f"extracted_frac: {metrics['test/answer_extracted_frac']:.2%}")
-        if "test/pass@1" in metrics:
-            print(f"pass@1: {metrics['test/pass@1']:.2%}  exec_error_frac: {metrics['test/exec_error_frac']:.2%}")
+        key = next((f"test/pass@1_k{k}" for k in ks if f"test/pass@1_k{k}" in metrics), None)
+        if key:
+            n_ok = int(round(metrics[key] * len(records)))
+            print(f"\n{key}: {metrics[key]:.2%} ({n_ok}/{len(records)})")
+        for k in ks:
+            kkey = f"test/pass@1_k{k}"
+            if kkey in metrics:
+                print(f"{kkey}: {metrics[kkey]:.2%}")
 
     out_path = Path(args.out) if args.out else Path(args.checkpoint).parent / "samples.json"
     with open(out_path, "w") as f:
@@ -341,10 +379,8 @@ def main():
             tags=["editflow", "shared-params", f"{task_name}-eval", "L256"],
         )
         run.log(metrics, step=0)
-        if "test/pass@1_match" in metrics:
-            run.summary["best_test_pass@1_match"] = metrics["test/pass@1_match"]
-        if "test/pass@1" in metrics:
-            run.summary["best_test_pass@1"] = metrics["test/pass@1"]
+        if "test/pass@1_k1" in metrics:
+            run.summary["best_test_pass@1_k1"] = metrics["test/pass@1_k1"]
         run.summary.update(metrics)
         url = run.get_url()
         run.finish()

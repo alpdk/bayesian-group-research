@@ -9,6 +9,7 @@ grad_accum: 1
 lr: 3.0e-4
 weight_decay: 0.03
 warmup_steps: 500
+lr_schedule: constant
 hidden_dim: 768
 num_layers: 12
 num_heads: 12
@@ -23,6 +24,7 @@ t_eps: 1.0e-2
 precision: bf16
 task_eval_samples: 32
 task_eval_steps: 128
+pass_at_1_k: [1, 2, 4, 8]
 val_max_examples: 256
 save_every: 2000
 log_every: 100

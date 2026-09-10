@@ -12,6 +12,8 @@ Read before cluster or training work:
 
 Always `squeue --me` on both `alpha` and `capella` before allocating or attaching. Do not assume old job IDs still exist.
 
+**Sync local → cluster before training.** The runnable checkout is `/data/horse/ws/alpo658h-insert-diff/projects/bayesian-group-research`. Rsync this working tree there (including uncommitted files; exclude `.venv` and `.cursor`) so the cluster copy matches local. Do not start a cluster run from a stale copy.
+
 **NEVER free jobs.** Do not `scancel` a job, holder, or pending request. Do not release, drain, or end an allocation.
 
 If the user says **stop**, **stop jobs**, **stop all runs**, or similar, that means **training only**: cancel the overlapping training **step** (`scancel JOBID.step`) and leave the holder running. It does **not** mean free the allocation.

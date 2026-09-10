@@ -1,0 +1,35 @@
+# 80-example TinyGSM smoke (20 steps, 1 GPU). Not a comparison run.
+dataset: tinygsm
+max_examples: 80
+val_ratio: 0.2
+steps: 20
+batch_size: 8
+grad_accum: 1
+lr: 3.0e-4
+weight_decay: 0.03
+warmup_steps: 2
+lr_schedule: constant
+hidden_dim: 768
+num_layers: 12
+num_heads: 12
+dropout: 0.1
+max_prompt_len: 128
+max_target_len: 128
+coupling: empty
+val_every: 10
+patience: 9999
+grad_clip: 1.0
+t_eps: 1.0e-2
+precision: bf16
+task_eval_samples: 0
+task_eval_steps: 8
+pass_at_1_k: [1]
+val_max_examples: 16
+save_every: 20
+log_every: 1
+seed: 42
+wandb:
+  project: edit-diffusion
+  entity: alpdk-podkopaev
+  name: editflow-tinygsm-smoke
+  group: smoke

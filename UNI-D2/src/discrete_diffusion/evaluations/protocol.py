@@ -7,11 +7,9 @@ import math
 from pathlib import Path
 from typing import Any, Dict, Optional, Sequence
 
-import torch
-
 
 def update_best_summary(summary: Any, metrics: Dict[str, float]) -> None:
-  """Write ``best_val_nll`` / ``best_test_pass@1_match`` / ``best_test_pass@1``."""
+  """Write ``best_val_loss`` / ``best_test_pass@1_k1`` / ``best_test_gsm8k_pass@1_k1``."""
   if summary is None:
     return
 
@@ -31,18 +29,15 @@ def update_best_summary(summary: Any, metrics: Dict[str, float]) -> None:
     if prev is None or (not math.isnan(value) and value > float(prev)):
       summary[summary_key] = value
 
-  _min_key("val/nll", "best_val_nll")
-  _min_key("val/loss", "best_val_nll")
-  _max_key("test/pass@1_match", "best_test_pass@1_match")
-  _max_key("test/pass@1", "best_test_pass@1")
-  _max_key("test/gsm8k/pass@1", "best_test_gsm8k_pass@1")
-  _max_key("test/gsm8k/pass@1_match", "best_test_gsm8k_pass@1_match")
+  _min_key("val/loss", "best_val_loss")
+  _max_key("test/pass@1_k1", "best_test_pass@1_k1")
+  _max_key("test/gsm8k/pass@1_k1", "best_test_gsm8k_pass@1_k1")
 
 
 def save_protocol_artifacts(
   save_dir: Path,
   step: int,
-  tokens: Optional[torch.Tensor],
+  tokens: Optional[Any],
   records: Sequence[Dict[str, Any]],
   metrics: Dict[str, float],
 ) -> Dict[str, str]:
@@ -53,6 +48,7 @@ def save_protocol_artifacts(
     json.dump(payload, fp, indent=2)
   paths = {"json": str(json_path)}
   if tokens is not None:
+    import torch
     pt_path = save_dir / f"step_{step}.pt"
     torch.save(tokens.detach().cpu(), pt_path)
     paths["pt"] = str(pt_path)

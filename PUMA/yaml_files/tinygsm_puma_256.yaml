@@ -56,7 +56,7 @@ validation:
   sampling:
     temperature: 0.0
     confidence: ["top_k"]
-    unmasking_num: [2, 3]
+    unmasking_num: [1, 2, 4, 8]
     eos_id: 151643
   
 data:

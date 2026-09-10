@@ -195,6 +195,8 @@ def split_tinygsm(data_dir: str, val_ratio: float = 0.05, seed: int = 2025):
     n = len(dataset)
 
     n_val = int(n * val_ratio)
+    if n_val <= 0:
+        return dataset, dataset
     n_train = n - n_val
 
     g = torch.Generator().manual_seed(seed)

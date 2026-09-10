@@ -124,6 +124,71 @@ def test_gsm8k_tokenization(mask_id: int, max_len: int = MAX_LEN):
     return load_cached()
 
 
+def _gold_number_from_code(code: str) -> str:
+    try:
+        with _time_limit(1.0):
+            ns = _safe_exec_no_timer(_extract_code(code))
+            fn = ns.get("simple_math_problem", None)
+            if fn is None:
+                return ""
+            return str(_to_number(fn()))
+    except (_Timeout, Exception):
+        return ""
+
+
+def evaluate_ddp_tinygsm_packed(model, cfg, device, rank: int, world_size: int, sampling):
+    """Generate on packed TinyGSM rows in ``data_dir`` (train=eval overfit)."""
+    from data.tiny_gsm import TinyGSMDataset
+
+    mask_id = cfg.data.mask_id
+    eos_id = int(getattr(cfg.training, "eos_id", 151643))
+    ds = TinyGSMDataset(cfg.data.data_dir)
+    N_val = len(ds)
+    per_rank = math.ceil(N_val / max(world_size, 1))
+    start = rank * per_rank
+    end = min(start + per_rank, N_val)
+    tokenizer = get_tokenizer()
+    local_correct, local_total = 0, 0
+    local_rows = []
+
+    with torch.no_grad():
+        for i in range(start, end):
+            item = ds[i]
+            labels = item["labels"].to(device)
+            prompt_mask = item["prompt_mask"].to(device)
+            xt = torch.where(
+                prompt_mask, labels, torch.full_like(labels, mask_id))
+            samples_tensor = mdm_sampling(
+                model, xt.unsqueeze(0), mask_id, sampling, device,
+                arm_init=cfg.model.arm_init != "none")
+            samples_tensor = samples_tensor.masked_fill(
+                samples_tensor == mask_id, tokenizer.pad_token_id)
+            gen = tokenizer.decode(
+                samples_tensor[0].cpu().tolist(), skip_special_tokens=True)
+            gold_ids = labels[(~prompt_mask) & (labels != eos_id)].cpu().tolist()
+            gold = tokenizer.decode(gold_ids, skip_special_tokens=True)
+            gold_n = _gold_number_from_code(gold)
+            ok = bool(gold_n) and evaluate_samples(gen, gold_n)
+            local_correct += int(ok)
+            local_total += 1
+            local_rows.append((ok, gold_n, gen))
+
+    tensor = torch.tensor(
+        [local_correct, local_total], dtype=torch.long, device=device)
+    if world_size > 1 and dist.is_initialized():
+        dist.all_reduce(tensor, op=dist.ReduceOp.SUM)
+    global_correct, global_total = tensor.tolist()
+    if rank == 0:
+        print(
+            f"TinyGSM packed eval: {global_correct}/{global_total} "
+            f"pass@1={global_correct / max(global_total, 1):.3f}")
+        for i, (ok, gold_n, gen) in enumerate(local_rows[:8]):
+            print(
+                f"  [{i}] correct={ok} gold={gold_n!r} "
+                f"gen={gen.replace(chr(10), ' ')[:240]!r}")
+    return global_correct / max(global_total, 1)
+
+
 def evaluate_ddp_gsm8k(model, cfg, device, rank: int, world_size: int, sampling):
     mask_id = cfg.data.mask_id
     diffusion_layout = getattr(cfg.training, "diffusion_layout", None)

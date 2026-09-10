@@ -22,6 +22,7 @@ from discrete_diffusion.evaluations.task import (
     aggregate_task_metrics,
     encode_question_prefixes,
     load_task_split,
+    pass_at_1_k_values,
     score_gsm8k_python_record,
     score_gsm8k_record,
     score_tinygsm_record,
@@ -74,49 +75,58 @@ def main() -> None:
   questions, golds = load_task_split(
       args.task, args.num_samples, tinygsm_cache=args.tinygsm_cache)
   n = len(questions)
-  if args.task == "tinygsm":
-    score_fn = score_tinygsm_record
-  elif args.task == "gsm8k-python":
-    score_fn = score_gsm8k_python_record
-  else:
-    score_fn = score_gsm8k_record
   print(
       f"{args.task} n={n} batch={args.batch_size} steps={args.num_steps}",
       flush=True)
 
   records = []
   all_tokens = []
+  metrics = {}
+  ks = pass_at_1_k_values(config)
   t0 = time.perf_counter()
-  for start in range(0, n, args.batch_size):
-    qs = questions[start:start + args.batch_size]
-    gs = golds[start:start + args.batch_size]
-    prefixes = encode_question_prefixes(tokenizer, qs)
-    samples = model.generate_samples(
-        num_samples=len(prefixes), num_steps=args.num_steps, prefix=prefixes)
-    samples = samples.detach().cpu()
-    all_tokens.append(samples)
-    decoded = tokenizer.batch_decode(samples.tolist(), skip_special_tokens=True)
-    pad_id = tokenizer.pad_token_id
-    for i, gen in enumerate(decoded):
-      scored = score_fn(gen, gs[i])
-      length = int((samples[i] != pad_id).sum().item()) if pad_id is not None else int(samples[i].numel())
-      records.append({
-          "prompt": qs[i],
-          "generation": gen,
-          "gold": scored.get("gold", gs[i]),
-          "gold_answer": gs[i],
-          "extracted_answer": scored.get("extracted_answer"),
-          "correct": scored.get("correct"),
-          "extracted": scored.get("extracted"),
-          "exec_error": scored.get("exec_error"),
-          "length": length,
-          "prompt_len": int(prefixes[i].numel()),
-      })
-    done = min(start + args.batch_size, n)
-    acc_key = "exec" if args.task in {"tinygsm", "gsm8k-python"} else "em"
-    print(f"  {done}/{n}  {acc_key}={sum(r['correct'] for r in records)/len(records):.4f}", flush=True)
-
-  metrics = aggregate_task_metrics(records, args.task)
+  for k in ks:
+    k_records = []
+    k_tokens = []
+    for start in range(0, n, args.batch_size):
+      qs = questions[start:start + args.batch_size]
+      gs = golds[start:start + args.batch_size]
+      prefixes = encode_question_prefixes(tokenizer, qs)
+      samples = model.generate_samples(
+          num_samples=len(prefixes), num_steps=args.num_steps,
+          prefix=prefixes, unmask_k=k)
+      samples = samples.detach().cpu()
+      k_tokens.append(samples)
+      decoded = tokenizer.batch_decode(samples.tolist(), skip_special_tokens=True)
+      pad_id = tokenizer.pad_token_id
+      for i, gen in enumerate(decoded):
+        gold = gs[i]
+        match = score_gsm8k_record(gen, gold)
+        if args.task == "tinygsm":
+          py = score_tinygsm_record(gen, gold)
+        else:
+          py = score_gsm8k_python_record(gen, gold)
+        primary = match if args.task == "gsm8k" else py
+        length = int((samples[i] != pad_id).sum().item()) if pad_id is not None else int(samples[i].numel())
+        k_records.append({
+            "prompt": qs[i],
+            "generation": gen,
+            "gold": primary.get("gold", gold),
+            "gold_answer": gold,
+            "extracted_answer": primary.get("extracted_answer"),
+            "correct": primary.get("correct"),
+            "extracted": primary.get("extracted"),
+            "correct_pass1": py.get("correct"),
+            "exec_error": py.get("exec_error"),
+            "length": length,
+            "prompt_len": int(prefixes[i].numel()),
+        })
+      done = min(start + args.batch_size, n)
+      acc = sum(r["correct_pass1"] for r in k_records) / len(k_records)
+      print(f"  k={k} {done}/{n}  pass@1={acc:.4f}", flush=True)
+    metrics.update(aggregate_task_metrics(k_records, args.task, k=k))
+    if int(k) == 1 or not records:
+      records = k_records
+      all_tokens = k_tokens
   metrics["perf/test_s"] = time.perf_counter() - t0
   tokens = torch.cat(all_tokens, dim=0)
   out_path = Path(args.out)
@@ -143,9 +153,7 @@ def main() -> None:
         tags=["shared-params", f"{args.task}-eval", "L256"],
     )
     run.log(metrics, step=0)
-    run.summary["best_test_pass@1_match"] = metrics.get("test/pass@1_match")
-    if "test/pass@1" in metrics:
-      run.summary["best_test_pass@1"] = metrics["test/pass@1"]
+    run.summary["best_test_pass@1_k1"] = metrics.get("test/pass@1_k1")
     run.summary.update(metrics)
     run.finish()
 

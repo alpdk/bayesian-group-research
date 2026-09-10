@@ -39,7 +39,7 @@ class FlexMDMAnyOrderSampler(Sampler):
 
   @torch.no_grad()
   def generate(self, model, *, num_samples, num_steps, eps, inject_bos,
-               prefix=None):
+               prefix=None, unmask_k=None):
     """Generate samples using Euler sampling.
     
     Args:
@@ -48,6 +48,7 @@ class FlexMDMAnyOrderSampler(Sampler):
       num_steps: Number of sampling steps
       eps: Small constant (unused, kept for interface compatibility)
       inject_bos: Whether to inject BOS token at position 0.
+      unmask_k: If set, write at most this many unmasks and insertions per step.
 
     Returns:
       Generated token sequences [num_samples, max_length]
@@ -57,6 +58,9 @@ class FlexMDMAnyOrderSampler(Sampler):
     device = model.device
     max_length = model.num_tokens
     batch_size = num_samples
+    k_cap = max(int(unmask_k), 1) if unmask_k is not None else None
+    if k_cap is not None:
+      num_steps = max(int(num_steps), (max_length + k_cap - 1) // k_cap)
     
     # Special tokens
     mask_token = model.tokenizer.mask_token_id
@@ -136,7 +140,17 @@ class FlexMDMAnyOrderSampler(Sampler):
       new_xt = _sample_tokens(trans_prob)
       new_xt[xt == pad_token] = pad_token
       new_xt = torch.where((xt != mask_token) & (xt != pad_token), xt, new_xt)
-      
+      if k_cap is not None:
+        changed = (xt == mask_token) & (new_xt != mask_token) & (new_xt != pad_token)
+        conf = trans_prob.gather(2, new_xt.unsqueeze(-1)).squeeze(-1)
+        conf = conf.masked_fill(~changed, float("-inf"))
+        keep_k = min(k_cap, max_length)
+        topv, topi = conf.topk(keep_k, dim=-1)
+        keep = torch.zeros_like(changed)
+        keep.scatter_(1, topi, torch.isfinite(topv))
+        new_xt = torch.where(keep & changed, new_xt, xt)
+        new_xt[xt == pad_token] = pad_token
+
       # ——— Insertion step (only if not final step) ———
       if step_idx != num_steps - 1:
         # Sample number of tokens to insert at each gap
@@ -154,10 +168,17 @@ class FlexMDMAnyOrderSampler(Sampler):
         # Check if insertion would exceed max_length
         valid = xt_len + total_ext <= max_length
         ext = ext * valid.view(batch_size, 1).long()
+        if k_cap is not None:
+          rates = len_rate.masked_fill(ext == 0, float("-inf"))
+          keep_k = min(k_cap, rates.shape[1])
+          topv, topi = rates.topk(keep_k, dim=-1)
+          keep = torch.zeros_like(ext, dtype=torch.bool)
+          keep.scatter_(1, topi, torch.isfinite(topv))
+          ext = ext * keep.long()
         
         # Compute cumulative extensions
         ext_ex = ext.int().cumsum(dim=1)  # [B, L+1]
-        new_len = xt_len + total_ext  # [B]
+        new_len = xt_len + ext.sum(dim=1)  # [B]
         
         # Create new sequence with insertions
         xt_tmp = torch.full_like(xt, pad_token)

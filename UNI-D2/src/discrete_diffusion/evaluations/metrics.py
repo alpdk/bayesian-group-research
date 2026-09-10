@@ -66,14 +66,14 @@ class BPD(NLL):
 
 class Metrics:
   def __init__(self, *_args, **_kwargs) -> None:
-    metrics = torchmetrics.MetricCollection({'nll': NLL()})
-    metrics.set_dtype(torch.float64)
-    self.train_nlls = metrics.clone(prefix='train/')
+    train_metrics = torchmetrics.MetricCollection({'nll': NLL()})
+    train_metrics.set_dtype(torch.float64)
+    self.train_nlls = train_metrics.clone(prefix='train/')
     self.train_aux = BPD()
-    self.valid_nlls = metrics.clone(prefix='val/')
+    valid_metrics = torchmetrics.MetricCollection({'loss': NLL()})
+    valid_metrics.set_dtype(torch.float64)
+    self.valid_nlls = valid_metrics.clone(prefix='val/')
     self.valid_aux = BPD()
-    self.valid_answer_nll = NLL()
-    self.valid_answer_nll.set_dtype(torch.float64)
     # Keep sample entropy as a lightweight generative signal during training
     self.sample_entropy = torchmetrics.aggregation.MeanMetric()
     self.sample_entropy.set_dtype(torch.float64)
@@ -84,7 +84,6 @@ class Metrics:
     self.train_aux = self.train_aux.to(*args, **kwargs)
     self.valid_nlls = self.valid_nlls.to(*args, **kwargs)
     self.valid_aux = self.valid_aux.to(*args, **kwargs)
-    self.valid_answer_nll = self.valid_answer_nll.to(*args, **kwargs)
 
   def reset(self):
     self.sample_entropy.reset()
@@ -92,16 +91,12 @@ class Metrics:
     self.train_aux.reset()
     self.valid_nlls.reset()
     self.valid_aux.reset()
-    self.valid_answer_nll.reset()
 
   def update_train(self, nll, num_tokens):
     self.train_nlls.update(nll, num_tokens)
 
   def update_valid(self, nll, num_tokens):
     self.valid_nlls.update(nll, num_tokens)
-
-  def update_valid_answer(self, nll, num_tokens):
-    self.valid_answer_nll.update(nll, num_tokens)
 
 
   # Generative ppl logic removed; use standalone evaluation script instead.

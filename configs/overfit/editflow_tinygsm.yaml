@@ -1,0 +1,35 @@
+# 2-example TinyGSM overfit with generate+score on the same rows.
+dataset: tinygsm
+max_examples: 32
+val_ratio: 0.0
+steps: 4000
+batch_size: 2
+grad_accum: 1
+lr: 1.0e-3
+weight_decay: 0.0
+warmup_steps: 10
+lr_schedule: constant
+hidden_dim: 768
+num_layers: 12
+num_heads: 12
+dropout: 0.0
+max_prompt_len: 256
+max_target_len: 256
+coupling: empty
+val_every: 500
+patience: 9999
+grad_clip: 1.0
+t_eps: 1.0e-2
+precision: bf16
+task_eval_samples: 2
+task_eval_steps: 256
+pass_at_1_k: [1]
+val_max_examples: 2
+save_every: 4000
+log_every: 10
+seed: 42
+wandb:
+  project: edit-diffusion
+  entity: alpdk-podkopaev
+  name: editflow-tinygsm-overfit2
+  group: overfit-5

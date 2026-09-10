@@ -63,9 +63,9 @@ eval:
   transfer_task: null  # extra test split; tinygsm runs default to gsm8k
   task_num_samples: 32
   wandb_table_rows: 16
-  nll_answer: true  # GSM8K / TinyGSM: also log val/nll_answer on answer tokens
   gen_ppl: false  # optional offline Gemma PPL; not part of the eval protocol
-  task_checkpoint_monitor: "test/pass@1_match"
+  task_checkpoint_monitor: "test/pass@1_k1"
+  pass_at_1_k: [1, 2, 4, 8]
 
 optim:
   weight_decay: 0

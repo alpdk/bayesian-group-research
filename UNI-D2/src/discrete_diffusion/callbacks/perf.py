@@ -55,6 +55,6 @@ class PerfMonitor(L.Callback):
     world = getattr(pl_module.trainer, "world_size", 1) or 1
     kwargs = dict(on_step=on_step, on_epoch=True, sync_dist=False, rank_zero_only=True)
     pl_module.log(f"perf/{split}_step_s", elapsed, **kwargs)
-    if tokens > 0:
+    if split == "train" and tokens > 0:
       pl_module.log(
-        f"perf/{split}_tokens_per_s", tokens * world / elapsed, **kwargs)
+        "perf/train_tokens_per_s", tokens * world / elapsed, **kwargs)

@@ -16,6 +16,9 @@ grad_clip: 1.0
 lr: 3.0e-4
 weight_decay: 0.03
 warmup_steps: 500
+# After warmup_steps, hold `lr`. No cosine / linear decay.
+lr_schedule: constant
+# Unused when lr_schedule is constant (kept for a cosine opt-in).
 warmup_lr_init: 1.0e-6
 lr_min: 0.0
 ema: 0.9999

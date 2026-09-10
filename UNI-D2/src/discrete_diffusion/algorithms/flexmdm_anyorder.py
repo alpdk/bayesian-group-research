@@ -243,7 +243,7 @@ class FlexMDMAnyOrder(TrainerBase):
 
     self.log("val/unmask_loss", unmask_loss, prog_bar=True, sync_dist=True)
     self.log("val/len_loss", len_loss, prog_bar=True, sync_dist=True)
-    self.log("val/nll", loss, prog_bar=True, sync_dist=True)
+    self.log("val/loss", loss, prog_bar=True, sync_dist=True)
 
     return loss
 
